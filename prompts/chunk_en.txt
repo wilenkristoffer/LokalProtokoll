@@ -1,0 +1,16 @@
+Below is part {part} of {parts} of an automatic meeting transcript.
+Each line starts with a timestamp and a speaker.
+
+Meeting: {meeting_name}
+
+<transcript>
+{transcript}
+</transcript>
+
+Write detailed notes in English about this part only, as a bullet list:
+- main topics and what was said about them
+- decisions that were made
+- tasks that were assigned, with owner and due date if mentioned
+- questions that were left open
+Keep speakers and timestamps where useful. Do not invent anything.
+Output only the notes.

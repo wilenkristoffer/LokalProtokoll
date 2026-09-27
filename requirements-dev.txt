@@ -1,0 +1,2 @@
+# Only needed for the benchmark (tests/benchmark.py), which measures RAM and CPU use.
+psutil

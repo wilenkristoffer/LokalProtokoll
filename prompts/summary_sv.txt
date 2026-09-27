@@ -1,0 +1,33 @@
+Nedan följer en automatisk transkribering av ett möte på svenska.
+Varje rad börjar med en tidsstämpel och talare ("Talare 1", "Talare 2" osv.).
+Transkriberingen kan innehålla hörfel och talarna kan ibland vara fel tilldelade.
+
+Möte: {meeting_name}
+Datum: {date}
+
+<transkribering>
+{transcript}
+</transkribering>
+
+Du är en noggrann mötessekreterare. Skriv ett protokoll på svenska i Markdown
+med exakt dessa fyra rubriker, i denna ordning:
+
+## Sammanfattning
+3-8 meningar om vad mötet handlade om och vad som kom fram.
+
+## Beslut
+Punktlista med beslut som fattades. Skriv "Inga tydliga beslut." om inga fattades.
+
+## Åtgärdspunkter
+En rad per uppgift i formatet:
+- [ ] Uppgift. Ansvarig: <namn eller talare, annars "ej angivet">. Deadline: <om nämnd, annars "ej angivet">.
+Skriv "Inga åtgärdspunkter." om det inte finns några.
+
+## Öppna frågor
+Punktlista med frågor som inte besvarades eller ska tas upp igen.
+Skriv "Inga öppna frågor." om det inte finns några.
+
+Regler:
+- Hitta inte på något som inte sägs i mötet.
+- Om en person nämns vid namn och det framgår vem som talar, använd namnet i stället för "Talare N".
+- Var koncis. Skriv bara protokollet, ingen inledning eller avslutning.

@@ -1,0 +1,100 @@
+# LokalProtokoll configuration.
+# Relative paths are relative to the folder this file is in.
+# Command line flags (see: python lp.py process --help) override these values.
+
+[paths]
+meetings_dir = "meetings"
+ffmpeg = "ffmpeg"
+whisper_cli = "tools/whisper.cpp/build/bin/Release/whisper-cli.exe"
+
+[transcribe]
+# "sv", "en" or "auto". Auto runs a quick language detection with model_detect first.
+language = "auto"
+threads = 6
+# KB-Whisper is trained on Swedish only, so English meetings use stock Whisper.
+model_sv = "models/whisper/kb-whisper-large-q5_0.bin"
+model_en = "models/whisper/ggml-large-v3-turbo-q5_0.bin"
+model_detect = "models/whisper/ggml-large-v3-turbo-q5_0.bin"
+# Detect language from a 30 s window starting here (skips silence at the start).
+detect_at_seconds = 30
+# Voice activity detection: skips silence, which reduces Whisper hallucinations.
+use_vad = true
+vad_model = "models/whisper/ggml-silero-v6.2.0.bin"
+# whisper.cpp's defaults (100 ms / 30 ms) cut speech into tight pieces, and Whisper
+# can then skip a whole piece (seen when a video changed with a sound effect).
+# Only pauses longer than this split the speech (ms):
+vad_min_silence_ms = 1000
+# Margin kept around each piece of speech (ms):
+vad_speech_pad_ms = 400
+# Starting text for Whisper, per language. Whisper copies its style: without it,
+# casual conversation sometimes comes out with no punctuation or capitals at all.
+# Names and terms that Whisper gets wrong can be added here too.
+prompt_sv = "Hej och v\u00e4lkommen till m\u00f6tet. D\u00e5 s\u00e4tter vi ig\u00e5ng, vem vill b\u00f6rja?"
+prompt_en = "Hello, everyone. Thanks for joining the meeting today. Let's get started."
+# Any extra whisper-cli flags, e.g. ["-ml", "120"]
+extra_args = []
+
+[diarize]
+# "sherpa" or "none". (pyannote was tested and not used: docs/MODELS.md)
+backend = "sherpa"
+# 0 = estimate automatically. Setting the real number helps a lot.
+num_speakers = 0
+# Only used when num_speakers = 0 ("Auto"). Lower value = more speakers. 1.0 was the
+# best safe value for TitaNet small in tests/tune_threshold.py; 1.2 merged speakers.
+threshold = 1.0
+threads = 6
+# Voice check afterwards: a turn that sounds clearly more like another speaker (by at
+# least this much, 0-1) is moved there. Catches quick replies that were merged with
+# the previous speaker. 0 = off. 0.2 improved every test recording.
+refine_margin = 0.2
+segmentation_model = "models/diarization/sherpa-onnx-pyannote-segmentation-3-0/model.onnx"
+# Voice model. TitaNet small separated speakers best in the benchmark (docs/MODELS.md).
+embedding_model = "models/diarization/nemo_en_titanet_small.onnx"
+
+[record]
+# Empty = Windows default device. Otherwise part of a device name from:
+#   python lp.py devices
+mic_device = ""
+speaker_device = ""
+# Your name for the mic track. Empty = "Jag" (Swedish) / "Me" (English).
+my_name = ""
+# Without a headset the mic also picks up the others from your speakers.
+# The echo filter drops mic segments whose words are also in the system audio.
+echo_filter = true
+echo_word_overlap = 0.6
+# Delete the full-quality mic.wav / system.wav after processing (the 16 kHz
+# copies are kept). About 350 MB per hour per track.
+delete_raw_audio = true
+
+[summarize]
+ollama_url = "http://localhost:11434"
+model = "gemma3:12b"
+# Ollama defaults to 4096 tokens on a 16 GB card, so always set this.
+# A 1 hour meeting is roughly 12-15k tokens.
+num_ctx = 32768
+temperature = 0.2
+# Sends think=false (Qwen3 and similar). Ignored by models without thinking.
+disable_thinking = true
+# Free the model's memory as soon as the minutes are written. Otherwise Ollama keeps
+# it loaded for 5 minutes (measured: about 11 GB VRAM and 7 GB RAM for gemma3:12b).
+unload_after = true
+# Tokens kept free for the answer. Longer transcripts are split into chunks.
+reserve_tokens = 3000
+# Used to estimate token count from text length.
+chars_per_token = 3.5
+# Models for: python lp.py compare <meeting folder>
+compare_models = ["gemma3:12b", "qwen3:14b", "gemma4:12b"]
+
+[prompts]
+# Prompt files are UTF-8 text. Placeholders: {transcript} {meeting_name} {date}
+# Chunk prompts also get {part} and {parts}.
+summary_sv = "prompts/summary_sv.txt"
+summary_en = "prompts/summary_en.txt"
+chunk_sv = "prompts/chunk_sv.txt"
+chunk_en = "prompts/chunk_en.txt"
+# Used when a meeting has no name: the title is made from the minutes. Placeholder: {summary}
+title_sv = "prompts/title_sv.txt"
+title_en = "prompts/title_en.txt"
+# Added at the bottom of summary.md.
+consent_note_sv = "Deltagarna informerades om inspelningen: ja / nej"
+consent_note_en = "Participants were informed about the recording: yes / no"

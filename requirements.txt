@@ -1,0 +1,6 @@
+numpy
+sherpa-onnx
+PyAudioWPatch
+customtkinter
+pystray
+Pillow

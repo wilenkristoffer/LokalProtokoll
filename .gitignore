@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+
+# Downloaded models and tools (setup_models.py, scripts/build_whispercpp.ps1)
+models/
+tools/
+*.part
+
+# Meetings and test data: recordings, transcripts and minutes never go into git
+meetings/
+tests/samples/
+tests/results/
+*.wav
+*.mp3
+*.m4a
+*.mp4
+*.mkv
+*.ogg
+*.flac
+*.webm
+*.log

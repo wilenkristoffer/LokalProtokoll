@@ -1,0 +1,9 @@
+Here are the minutes of a meeting:
+
+<minutes>
+{summary}
+</minutes>
+
+Write a short, descriptive title in English for the meeting, at most 6 words, saying what the meeting was about.
+Examples: "Q4 budget and launch date" or "Review of the new form".
+Answer with the title only, without quotes and without a period at the end.

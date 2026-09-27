@@ -1,0 +1,46 @@
+# Setups to compare with:  python tests/benchmark.py --variants tests/variants.toml
+# Run one with:             python tests/benchmark.py --variants tests/variants.toml --only "KB medium"
+#
+# Each variant has a name and optionally:
+#   set  = config.toml overrides, "section.key=value"
+#   args = extra flags for "lp.py process"
+#   language = only run on samples in this language
+# The models are downloaded with:  python setup_models.py --compare
+
+# ----- Speech-to-text (Swedish samples) -----
+
+[[variant]]
+name = "Default (KB large, TitaNet small)"
+
+[[variant]]
+name = "KB medium"
+language = "sv"
+set = ["transcribe.model_sv=models/whisper/kb-whisper-medium-q5_0.bin"]
+
+[[variant]]
+name = "KB small"
+language = "sv"
+set = ["transcribe.model_sv=models/whisper/kb-whisper-small-q5_0.bin"]
+
+[[variant]]
+name = "Whisper turbo for Swedish"
+language = "sv"
+set = ["transcribe.model_sv=models/whisper/ggml-large-v3-turbo-q5_0.bin"]
+
+[[variant]]
+name = "Old VAD settings"
+set = ["transcribe.vad_min_silence_ms=100", "transcribe.vad_speech_pad_ms=30"]
+
+# ----- Speaker detection -----
+
+[[variant]]
+name = "Voices: ERes2Net (old default)"
+set = ["diarize.embedding_model=models/diarization/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"]
+
+[[variant]]
+name = "Voices: WeSpeaker ResNet34"
+set = ["diarize.embedding_model=models/diarization/wespeaker_en_voxceleb_resnet34_LM.onnx"]
+
+[[variant]]
+name = "Voices: CAM++"
+set = ["diarize.embedding_model=models/diarization/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"]

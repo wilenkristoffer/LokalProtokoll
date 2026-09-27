@@ -1,0 +1,9 @@
+Här är protokollet från ett möte:
+
+<protokoll>
+{summary}
+</protokoll>
+
+Skriv en kort, beskrivande titel på svenska för mötet, högst 6 ord, som säger vad mötet handlade om.
+Exempel: "Budget för Q4 och lanseringsdatum" eller "Genomgång av nya formuläret".
+Svara bara med titeln, utan citattecken och utan punkt i slutet.
