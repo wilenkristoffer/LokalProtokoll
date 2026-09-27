@@ -699,6 +699,16 @@ class App(ctk.CTk):
         self.proc_buttons = ctk.CTkFrame(f, fg_color="transparent", height=0)
 
     def _build_list(self):
+        # Search all meetings: Enter shows the results in the panel on the right.
+        box = ctk.CTkFrame(self.left, fg_color=CARD, corner_radius=10, border_width=1, border_color=LINE)
+        box.pack(fill="x", padx=14, pady=(0, 8))
+        ctk.CTkLabel(box, text=ICONS["find"], font=self.f_icon, text_color=MUTED, width=16).pack(side="left", padx=(10, 4))
+        self.search_entry = ctk.CTkEntry(box, placeholder_text="Search all meetings", font=self.f_body, height=32,
+                                         border_width=0, fg_color=CARD, text_color=INK)
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 6), pady=2)
+        self.search_entry.bind("<Return>", lambda e: self.run_search())
+        self.search_entry.bind("<Escape>", lambda e: self.search_entry.delete(0, "end"))
+
         head = ctk.CTkFrame(self.left, fg_color="transparent")
         head.pack(fill="x", padx=18, pady=(4, 2))
         ctk.CTkLabel(head, text="MEETINGS", font=self.f_small, text_color=MUTED).pack(side="left")
@@ -748,7 +758,16 @@ class App(ctk.CTk):
         w, h, x, y = map(int, re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", self.geometry()).groups())
         return w, h, x, y
 
-    def open_viewer(self, folder=None, view="minutes", log=None):
+    def run_search(self):
+        from . import search
+        query = self.search_entry.get().strip()
+        if not query:
+            return
+        self.open_viewer(search=(query, search.search(self.cfg, query)))
+
+    def open_viewer(self, folder=None, view="minutes", log=None, search=None, focus=None):
+        """Open the panel on the right: a meeting (view = minutes/transcript/speakers,
+        focus = a sentence to scroll to), a log, or search results."""
         if not self.viewer_open:
             w, h, x, y = self._geometry()
             self.closed_width = w
@@ -766,8 +785,13 @@ class App(ctk.CTk):
         if log is not None:
             self.viewer.show_log(*log)
             self.highlight_row(None)
+        elif search is not None:
+            self.viewer.show_search(*search)
+            self.highlight_row(None)
         else:
             self.viewer.open(folder, view)
+            if focus is not None:
+                self.viewer.focus_sentence(focus)
             self.highlight_row(folder)
 
     def close_viewer(self):

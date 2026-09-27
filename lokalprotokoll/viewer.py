@@ -129,6 +129,8 @@ class Viewer(ctk.CTkFrame):
         t.tag_configure("para", spacing1=2, spacing3=4)
         t.tag_configure("log", font=f["mono"], spacing1=0, spacing3=0)
         t.tag_configure("hint", font=f["italic"], foreground=pick(MUTED), spacing3=4)
+        t.tag_configure("match", font=f["bold"], background=pick(STALE))
+        t.tag_configure("focus", background=pick(STALE))
         for n in range(12):
             t.tag_configure(f"spk{n}", foreground=pick(speaker_color(n)))
 
@@ -249,6 +251,79 @@ class Viewer(ctk.CTkFrame):
         self.text.configure(state="disabled")
         self.text.yview_moveto(1)
 
+    def show_search(self, query, results):
+        """Search results from all meetings. Clicking a hit opens the meeting there."""
+        from .search import snippet, terms_of
+        play_sound(None)
+        self.folder, self.meeting, self.view = None, None, "search"
+        if self.speaker_panel is not None:
+            self.speaker_panel.destroy()
+            self.speaker_panel = None
+        self.banner.pack_forget()
+        places = sum(len(r["sentences"]) + len(r["minutes"]) for r in results)
+        self.title_label.configure(text=f"Search: {query}")
+        self.meta_label.configure(text=f"{places} place{'s' if places != 1 else ''} in {len(results)} "
+                                       f"meeting{'s' if len(results) != 1 else ''}")
+        self.bar.pack_forget()
+        self._show_text()
+        t = self.text
+        if not results:
+            self._message("Nothing found. All the words must be in the same sentence; \"quotes\" search for a phrase.")
+        terms = terms_of(query)
+        n = 0
+
+        def link(text, tags, action):
+            nonlocal n
+            n += 1
+            tag = f"hit{n}"
+            start = t.index("end-1c")
+            _insert_highlighted(t, text, terms, tags + (tag,))
+            t.tag_bind(tag, "<Enter>", lambda e: (t.tag_configure(tag, background=pick(LINE)), t.configure(cursor="hand2")))
+            t.tag_bind(tag, "<Leave>", lambda e: (t.tag_configure(tag, background=""), t.configure(cursor="arrow")))
+            t.tag_bind(tag, "<ButtonRelease-1>", lambda e: action())
+            return start
+
+        for r in results:
+            folder = r["folder"]
+            link(r["name"], ("h2",), lambda f=folder: self.app.open_viewer(f, "minutes"))
+            t.insert("end", "\n")
+            t.insert("end", r["date"] + "\n", ("ts",))
+            for line in r["minutes"]:
+                t.insert("end", "Minutes:  ", ("marker", "li0"))
+                link(snippet(line, terms), ("li0",), lambda f=folder: self.app.open_viewer(f, "minutes"))
+                t.insert("end", "\n", ("li0",))
+            for s in r["sentences"]:
+                who = f"{s['speaker']}: " if s["speaker"] else ""
+                t.insert("end", output.fmt_time(s["start"]) + "  ", ("ts", "li0"))
+                link(who + snippet(s["text"], terms), ("li0",),
+                     lambda f=folder, i=s["index"]: self.app.open_viewer(f, "transcript", focus=i))
+                t.insert("end", "\n", ("li0",))
+            if r["more"]:
+                t.insert("end", f"... and {r['more']} more sentences in this meeting\n", ("italic", "li0"))
+        t.configure(state="disabled")
+        t.yview_moveto(0)
+
+    def focus_sentence(self, index):
+        """Scroll the transcript to a sentence and highlight it for a few seconds."""
+        tag = f"seg{index}"
+        ranges = self.text.tag_ranges(tag)
+        if not ranges:
+            return
+        self.text.tag_add("focus", ranges[0], ranges[1])
+        self.text.tag_raise("focus")
+
+        def scroll():
+            # The text was just drawn: wait for the layout, then put the sentence about
+            # a third of the way down the view.
+            self.text.update_idletasks()
+            line = int(str(ranges[0]).split(".")[0])
+            total = int(self.text.index("end-1c").split(".")[0])
+            first, last = self.text.yview()
+            self.text.yview_moveto(max(0.0, (line - 1) / max(total, 1) - (last - first) / 3))
+            self.text.see(ranges[0])
+        self.after(30, scroll)
+        self.after(4000, lambda: self.text.tag_remove("focus", "1.0", "end"))
+
     def _show_text(self):
         self._style_text()
         self.scroll.pack(side="right", fill="y")
@@ -280,6 +355,25 @@ class Viewer(ctk.CTkFrame):
         path = self._current_file()
         if path and path.exists():
             os.startfile(path)
+
+
+def _insert_highlighted(text, s, terms, tags):
+    """Insert s with the search words marked (tag "match")."""
+    folded = s.casefold()
+    spans = []
+    for term in terms:
+        start = folded.find(term)
+        while start >= 0:
+            spans.append((start, start + len(term)))
+            start = folded.find(term, start + len(term))
+    pos = 0
+    for a, b in sorted(spans):
+        if a < pos:
+            continue
+        text.insert("end", s[pos:a], tags)
+        text.insert("end", s[a:b], tags + ("match",))
+        pos = b
+    text.insert("end", s[pos:], tags)
 
 
 def _insert_inline(text, s, tags):

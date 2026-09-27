@@ -8,6 +8,7 @@
   python lp.py rename <meeting folder> [1="Anna" 2="Erik"] [--summarize]
   python lp.py summarize <meeting folder> [--llm qwen3:14b]
   python lp.py compare <meeting folder> [--models gemma4:12b qwen3:14b]
+  python lp.py search "budget"
 """
 
 import argparse
@@ -244,6 +245,24 @@ def cmd_evaluate(cfg, args):
         print(f"  {output.speaker_name(meeting, int(ours) if ours.isdigit() else None) or ours} = {theirs}")
 
 
+def cmd_search(cfg, args):
+    from lokalprotokoll import search
+
+    results = search.search(cfg, args.query)
+    if not results:
+        print("Nothing found.")
+        return
+    for r in results:
+        print(f"\n{r['name']}  ({r['date']})  {r['folder']}")
+        for line in r["minutes"]:
+            print(f"  minutes: {line}")
+        for s in r["sentences"]:
+            who = f"{s['speaker']}: " if s["speaker"] else ""
+            print(f"  [{output.fmt_time(s['start'])}] {who}{s['text']}")
+        if r["more"]:
+            print(f"  ... and {r['more']} more sentences")
+
+
 def cmd_app(cfg, args):
     from lokalprotokoll import app
 
@@ -445,6 +464,10 @@ def main():
     p.add_argument("folder", help="A processed meeting folder")
     p.add_argument("reference", help="Reference JSON: [{start, end, speaker, text}, ...]")
     p.set_defaults(func=cmd_evaluate)
+
+    p = sub.add_parser("search", help="Search the transcripts and minutes of all meetings")
+    p.add_argument("query", help='Words that must all be in the same sentence; "quotes" for a phrase')
+    p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("app", help="Open the LokalProtokoll window")
     p.set_defaults(func=cmd_app)
