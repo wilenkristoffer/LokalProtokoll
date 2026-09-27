@@ -14,6 +14,17 @@ audio file -> ffmpeg (16 kHz mono wav)
 
 ## Setup on a clean Windows machine
 
+**The quick way:** run the installer from the project folder. It installs what is missing (Python, ffmpeg, Ollama,
+the build tools and Vulkan SDK for whisper.cpp, the models) and skips what is already there, so it is safe to run
+again:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1
+```
+
+Without a usable GPU, or to skip building whisper.cpp, use `setup.ps1 -CpuOnly` (a ready-made, slower CPU version).
+The steps below are what the installer does, if you want to do them by hand.
+
 Run all commands in PowerShell from the project folder.
 
 ### 1. Python 3.11 or newer
