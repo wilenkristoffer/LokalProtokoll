@@ -20,3 +20,6 @@ tests/results/
 *.flac
 *.webm
 *.log
+
+# Saved voices are biometric personal data
+voices/

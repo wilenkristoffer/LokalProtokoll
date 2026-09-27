@@ -4,6 +4,9 @@
 
 [paths]
 meetings_dir = "meetings"
+# Saved voices (lp.py remember / "Remember voice" in the app). Biometric personal data:
+# kept only here, never in git. Delete with: python lp.py voices --delete "Name"
+voices_dir = "voices"
 ffmpeg = "ffmpeg"
 whisper_cli = "tools/whisper.cpp/build/bin/Release/whisper-cli.exe"
 

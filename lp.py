@@ -69,8 +69,26 @@ def run_diarization(cfg, meeting, out_dir, timer, backend, num_speakers, thresho
     if any(k != "0" for k in names):
         print("    Speaker numbers changed, so earlier names were removed. Run rename again.")
         meeting["speaker_names"] = {k: v for k, v in names.items() if k == "0"}
+    recognize_voices(cfg, meeting, out_dir)
     speakers.make_samples(meeting, out_dir)
     print(f"    Voice samples: {Path(out_dir, 'speakers.html')}")
+
+
+def recognize_voices(cfg, meeting, out_dir):
+    """Name speakers whose voice was saved earlier (lokalprotokoll/voices.py)."""
+    from lokalprotokoll import voices
+
+    meeting.pop("recognized", None)
+    if not voices.list_voices(cfg):
+        return
+    matches = voices.recognize(cfg, out_dir, meeting)
+    if matches:
+        names = meeting.setdefault("speaker_names", {})
+        for n, match in matches.items():
+            names[str(n)] = match["name"]
+            print(f"    Recognized {output.labels(meeting['language'])['speaker']} {n} as {match['name']} "
+                  f"(similarity {match['score']:.2f})")
+        meeting["recognized"] = {str(n): m for n, m in matches.items()}
 
 
 def run_summary(cfg, meeting, out_dir, timer, model):
@@ -243,6 +261,35 @@ def cmd_evaluate(cfg, args):
     print(f"Speakers: {result['found_speakers']} found, {result['reference_speakers']} in the reference")
     for ours, theirs in result["speaker_mapping"].items():
         print(f"  {output.speaker_name(meeting, int(ours) if ours.isdigit() else None) or ours} = {theirs}")
+
+
+def cmd_remember(cfg, args):
+    """Save a speaker's voice so they are named automatically in later meetings."""
+    from lokalprotokoll import voices
+
+    meeting = output.load_meeting(args.folder)
+    name = args.name or meeting.get("speaker_names", {}).get(str(args.speaker))
+    if not name:
+        raise SystemExit("Give a name: --name \"Anna Svensson\" (or name the speaker first with rename)")
+    seconds, message = voices.save_voice(cfg, name, args.folder, meeting, args.speaker)
+    print(message)
+    if seconds < voices.MIN_SAVE_S:
+        raise SystemExit(1)
+
+
+def cmd_voices(cfg, args):
+    from lokalprotokoll import voices
+
+    if args.delete:
+        found = voices.delete_voice(cfg, args.delete)
+        print(f"Deleted the voice of {args.delete}." if found else f"No saved voice called {args.delete}.")
+        return
+    saved = voices.list_voices(cfg)
+    if not saved:
+        print("No saved voices.")
+    for v in saved:
+        print(f"  {v['name']:<28} {v['seconds']:5.0f} s of speech, from {len(v.get('meetings', []))} meeting(s), "
+              f"updated {v.get('updated', '?')}")
 
 
 def cmd_search(cfg, args):
@@ -464,6 +511,16 @@ def main():
     p.add_argument("folder", help="A processed meeting folder")
     p.add_argument("reference", help="Reference JSON: [{start, end, speaker, text}, ...]")
     p.set_defaults(func=cmd_evaluate)
+
+    p = sub.add_parser("remember", help="Save a speaker's voice, to name them automatically in later meetings")
+    p.add_argument("folder")
+    p.add_argument("speaker", type=int, help="Speaker number (Talare 2 -> 2)")
+    p.add_argument("--name", help="Name (default: the name given with rename)")
+    p.set_defaults(func=cmd_remember)
+
+    p = sub.add_parser("voices", help="List the saved voices, or delete one")
+    p.add_argument("--delete", metavar="NAME", help="Forget this person's voice")
+    p.set_defaults(func=cmd_voices)
 
     p = sub.add_parser("search", help="Search the transcripts and minutes of all meetings")
     p.add_argument("query", help='Words that must all be in the same sentence; "quotes" for a phrase')

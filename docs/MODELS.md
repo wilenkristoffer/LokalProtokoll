@@ -91,6 +91,27 @@ for Swedish. The benchmark shows which one separates speakers best.
 
 pyannote, the best-known alternative, was tested and is not used (see "Tested and not used" below).
 
+### Recognizing saved voices
+
+"Remember voice" stores a person's TitaNet fingerprint (the average over their longest segments, up to 90 s). In
+later meetings every speaker with at least 10 s of speech is compared with the saved voices.
+
+Measured on the test recordings (a voice saved from the first half of a recording, compared with the second
+half; 11 people):
+
+| | Similarity |
+|---|---|
+| Same person, 25 s of speech or more | 0.84-0.95 |
+| Same person, only 16 s of speech | 0.47 |
+| Different people | mostly below 0.45; highest 0.72 (with the 16-second person) |
+
+So a speaker is named only if the best voice scores **at least 0.75** and beats the next best voice by **at least
+0.10**, and a voice can only be saved from **at least 20 s** of speech. In a test across two separate meetings
+(the two halves of AMI ES2004a, processed separately), 3 of 4 people were recognized, all with the right name; the
+fourth, with only 30 s of speech, was left unnamed. Recordings on other days or with other microphones usually
+score somewhat lower, so a missing name is more likely than a wrong one. The limits are `MATCH_SCORE`,
+`MATCH_MARGIN` and `MIN_SAVE_S` in `lokalprotokoll/voices.py`.
+
 **Tip:** telling it the number of speakers (`--speakers`, or "Others" in the app) helps much more than any
 model choice. Guessing the number is the weakest part of all diarization systems.
 

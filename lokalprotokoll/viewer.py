@@ -15,7 +15,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from . import output, speakers
-from .theme import (BG, BOX, BOX_CHECKED, BULLET, CARD, CLOSE, INK, INK_HOVER, LINE, MIDDOT, MUTED, PLAY,
+from .theme import (BG, BOX, BOX_CHECKED, BULLET, CARD, CHECK, CLOSE, INK, INK_HOVER, LINE, MIDDOT, MUTED, PLAY,
                     SQUARE, fmt_duration, pick, restyle_segments, speaker_color)
 
 STALE = ("#F3E5C4", "#3A3222")  # soft amber: "these minutes are out of date"
@@ -463,9 +463,15 @@ class SpeakerPanel(ctk.CTkFrame):
         super().__init__(parent, fg_color="transparent")
         self.app, self.folder, self.meeting = app, folder, meeting
         self.entries = {}
+        self.remember = {}   # speaker -> BooleanVar for "Remember voice"
         self.playing = None  # (button, id of the timer that resets it when the clip ends)
-        ctk.CTkLabel(self, text="Play each voice and type a name.", font=app.f_small,
-                     text_color=MUTED).pack(anchor="w", padx=8, pady=(2, 6))
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.pack(fill="x", padx=8, pady=(2, 6))
+        ctk.CTkLabel(head, text="Play each voice and type a name.", font=app.f_small,
+                     text_color=MUTED).pack(side="left")
+        self.voices_btn = app.icon_button(head, "speakers", "Saved voices", self.show_saved_voices)
+        self.voices_btn.pack(side="right")
+        recognized = meeting.get("recognized", {})
 
         rows = ctk.CTkScrollableFrame(self, fg_color="transparent", scrollbar_button_color=LINE,
                                       scrollbar_button_hover_color=MUTED)
@@ -494,6 +500,19 @@ class SpeakerPanel(ctk.CTkFrame):
             ctk.CTkLabel(col, text=f"\"{quote[:140]}\"", font=app.f_small, text_color=MUTED, anchor="w",
                          justify="left", wraplength=360).pack(fill="x")
             self.entries[speaker] = entry
+            if speaker == 0:
+                continue  # the mic track is you: your name is my_name in config.toml
+            extra = ctk.CTkFrame(col, fg_color="transparent")
+            extra.pack(fill="x", pady=(4, 0))
+            match = recognized.get(str(speaker))
+            if match:
+                ctk.CTkLabel(extra, text=f"{CHECK} Recognized from saved voice ({round(100 * match['score'])}% similar)",
+                             font=app.f_small, text_color=speaker_color(0), anchor="w").pack(side="left", padx=(0, 12))
+            self.remember[speaker] = ctk.BooleanVar(value=False)
+            ctk.CTkCheckBox(extra, text="Remember voice" if not match else "Update saved voice",
+                            variable=self.remember[speaker], font=app.f_small, text_color=MUTED, fg_color=INK,
+                            hover_color=INK_HOVER, border_color=MUTED, checkmark_color=BG, checkbox_width=16,
+                            checkbox_height=16).pack(side="left")
 
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(fill="x", padx=6, pady=(8, 0))
@@ -534,13 +553,46 @@ class SpeakerPanel(ctk.CTkFrame):
     def save(self):
         names = [f"{n}={e.get().strip()}" for n, e in self.entries.items()
                  if e.get().strip() and e.get().strip() != output.speaker_name(self.meeting, n)]
-        if not names:
+        to_remember = [n for n, var in self.remember.items() if var.get()]
+        if not names and not to_remember:
             return
         if self.app.worker.busy():
             messagebox.showinfo("Busy", "Wait until the current job is finished.", parent=self.app)
             return
         self.stop_playing()
-        args = ["rename", str(self.folder)] + names
-        if self.rewrite.get():
-            args.append("--summarize")
-        self.app.worker.run(args, self.meeting["name"], self.folder)
+        if to_remember and not self._remember_voices(to_remember):
+            return
+        if names:
+            args = ["rename", str(self.folder)] + names
+            if self.rewrite.get():
+                args.append("--summarize")
+            self.app.worker.run(args, self.meeting["name"], self.folder)
+
+    def _remember_voices(self, numbers):
+        """Save the voices of the ticked speakers under the names typed. Returns False
+        if nothing should happen yet (a speaker still has a placeholder name)."""
+        from .voices import save_voice
+        label = output.labels(self.meeting["language"])["speaker"]
+        todo = []
+        for n in numbers:
+            name = self.entries[n].get().strip()
+            if not name or name == f"{label} {n}":
+                messagebox.showinfo("Remember voice", f"Type the person's name for {label} {n} first.",
+                                    parent=self.app)
+                return False
+            todo.append((n, name))
+        if not messagebox.askyesno(
+                "Remember voice", "Save the voice of " + ", ".join(name for _, name in todo) + "?\n\n"
+                "They will be named automatically in later meetings. A voice fingerprint is personal data: "
+                "tell them, and delete it under \"Saved voices\" when it is no longer needed.", parent=self.app):
+            return False
+        messages = [save_voice(self.app.cfg, name, self.folder, self.meeting, n)[1] for n, name in todo]
+        messagebox.showinfo("Remember voice", "\n\n".join(messages), parent=self.app)
+        for var in self.remember.values():
+            var.set(False)
+        return True
+
+    def show_saved_voices(self):
+        from .voices import list_voices
+        saved = list_voices(self.app.cfg)
+        self.app.saved_voices_menu(saved, self.voices_btn)

@@ -910,6 +910,23 @@ class App(ctk.CTk):
         PromptPopup(self, ("Find and replace (whole words, any case)", [("Find", ""), ("Replace with", "")],
                            save, "Replace"), *self._popup_at(widget))
 
+    def saved_voices_menu(self, saved, widget):
+        """The saved voices, each with "Forget" (from the Speakers tab)."""
+        from . import voices
+
+        def forget(name):
+            if messagebox.askyesno("Forget voice", f"Delete the saved voice of {name}? They will no longer be "
+                                   "named automatically. Names in earlier meetings stay.", parent=self):
+                voices.delete_voice(self.cfg, name)
+        if saved:
+            items = [(ICONS["delete"], f"Forget {v['name']}  ({v['seconds']:.0f} s, {len(v.get('meetings', []))} "
+                      f"meeting{'s' if len(v.get('meetings', [])) != 1 else ''})", lambda n=v["name"]: forget(n), True)
+                     for v in saved]
+        else:
+            items = [(ICONS["speakers"], "No saved voices yet. Tick \"Remember voice\" for a named speaker.",
+                      lambda: None, False)]
+        PopupMenu(self, items, *self._popup_at(widget))
+
     def sentence_menu(self, folder, index, x, y):
         """Opened by clicking a sentence in the Transcript tab."""
         from . import edit

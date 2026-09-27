@@ -140,6 +140,17 @@ The rest of the window:
   after these minutes were written" with a button to rewrite them. The minutes can also be edited by hand
   ("Edit" in the Minutes tab).
 - **Import file**: processes an existing recording, using the name and speaker count from the fields above.
+- **Search all meetings** (the box above the list): finds every sentence in the transcripts and every line in the
+  minutes that contains all the search words, or a "quoted phrase". Click a result to open the transcript at that
+  sentence. From the command line: `python lp.py search "budget"`.
+- **Remember voice** (Speakers tab): tick it for a person you have named, and they are named automatically in
+  later meetings. It needs at least 20 seconds of that person's speech; saving the voice again from another
+  meeting makes it more reliable. A speaker is only named when the match is clear (see docs/MODELS.md); otherwise
+  they keep "Talare N". "Saved voices" lists the voices and deletes them. From the command line:
+  `python lp.py remember <meeting folder> 2 --name "Anna"`, `python lp.py voices`, `python lp.py voices --delete "Anna"`.
+
+  **A saved voice is biometric personal data (GDPR).** Tell the person before you save their voice, and delete it
+  when it is no longer needed. Voices are stored only in the `voices` folder of the project, never in git.
 
 The app runs the same `lp.py` commands as below, so everything works the same from the command line.
 

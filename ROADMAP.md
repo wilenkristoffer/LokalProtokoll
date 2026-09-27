@@ -10,6 +10,7 @@
 - [ ] Step 4: live transcription (maybe never)
 - [x] Benchmark with test recordings (`tests/`), results and model guide in `docs/MODELS.md`
 - [x] Corrections in the app (speakers, text, name, minutes), installer (`setup.ps1`), git
+- [x] Search across all meetings, and saved voices that are recognized in later meetings
 
 ## Testing still needed (Step 2)
 
@@ -19,14 +20,10 @@
   - Swedish summary quality on a real meeting: does gemma4:12b (chosen on a Riksdag debate) also do well there?
 - Automatic speaker count is unreliable on short recordings; check how it behaves on long ones.
 
-## Next (chosen)
-
-- **Voice enrollment**: save a person's voice once (from a voice sample in the Speakers tab), so they are named
-  automatically in later meetings. sherpa-onnx can compare the TitaNet voice fingerprints already used for
-  speaker detection.
-- **Search across all meetings**: find what was said or decided in any meeting ("budget", a name), from the app.
-
 ## Later
+
+- **Voice recognition on real meetings**: check the recognition limits (docs/MODELS.md) with voices saved
+  on one day and recognized on another, with different microphones.
 
 - **Benchmark on other hardware**: the numbers in docs/MODELS.md are from one computer (RX 7800 XT). Not
   measured yet: GPUs with 4-8 GB, CPU-only speed for KB-Whisper small/medium.
