@@ -77,7 +77,7 @@ def chat(cfg, model, prompt):
 
 def unload(cfg, model):
     """Tell Ollama to free the model's GPU memory and RAM now. Otherwise it keeps the
-    model loaded for 5 minutes, which is about 11 GB VRAM and 7 GB RAM for gemma3:12b."""
+    model loaded for 5 minutes, which is 11-13 GB VRAM and 8-10 GB RAM for the 12B models."""
     if not cfg["summarize"].get("unload_after", True):
         return
     try:

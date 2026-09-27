@@ -68,7 +68,7 @@ delete_raw_audio = true
 
 [summarize]
 ollama_url = "http://localhost:11434"
-model = "gemma3:12b"
+model = "gemma4:12b"
 # Ollama defaults to 4096 tokens on a 16 GB card, so always set this.
 # A 1 hour meeting is roughly 12-15k tokens.
 num_ctx = 32768
@@ -76,14 +76,14 @@ temperature = 0.2
 # Sends think=false (Qwen3 and similar). Ignored by models without thinking.
 disable_thinking = true
 # Free the model's memory as soon as the minutes are written. Otherwise Ollama keeps
-# it loaded for 5 minutes (measured: about 11 GB VRAM and 7 GB RAM for gemma3:12b).
+# it loaded for 5 minutes (measured: 11-13 GB VRAM and 8-10 GB RAM for the 12B models).
 unload_after = true
 # Tokens kept free for the answer. Longer transcripts are split into chunks.
 reserve_tokens = 3000
 # Used to estimate token count from text length.
 chars_per_token = 3.5
 # Models for: python lp.py compare <meeting folder>
-compare_models = ["gemma3:12b", "qwen3:14b", "gemma4:12b"]
+compare_models = ["gemma4:12b", "gemma3:12b", "qwen3:14b"]
 
 [prompts]
 # Prompt files are UTF-8 text. Placeholders: {transcript} {meeting_name} {date}

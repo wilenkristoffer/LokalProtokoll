@@ -93,7 +93,7 @@ Install it from https://ollama.com/download. The RX 7800 XT is supported on Wind
 Keep your Adrenalin driver up to date. Then pull a model:
 
 ```powershell
-ollama pull gemma3:12b
+ollama pull gemma4:12b
 ```
 
 ## The app
@@ -251,8 +251,8 @@ python lp.py summarize meetings\2026-09-26_1400_Styrelsemote --llm qwen3:14b
 ### Comparing summary models
 
 ```powershell
+ollama pull gemma3:12b
 ollama pull qwen3:14b
-ollama pull gemma4:12b
 python lp.py compare meetings\2026-09-26_1400_Styrelsemote
 ```
 

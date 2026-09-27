@@ -10,7 +10,7 @@ your own computer.
 | Speech to text, English, language detection | Whisper large-v3-turbo (q5_0) | GPU (Vulkan), or CPU | `transcribe.model_en`, `model_detect` |
 | Finding speech (voice activity detection) | Silero VAD v6.2 | CPU | `transcribe.vad_model` |
 | Who spoke when (speaker diarization) | pyannote segmentation 3.0 + TitaNet small voice model, via sherpa-onnx | CPU | `diarize.*` |
-| Minutes (summary) | gemma3:12b via Ollama | GPU (ROCm/Vulkan), or CPU | `summarize.model` |
+| Minutes (summary) | gemma4:12b via Ollama | GPU (ROCm/Vulkan), or CPU | `summarize.model` |
 
 ## Speech to text
 
@@ -102,11 +102,12 @@ model itself.
 
 | Model | Download | Measured on the RX 7800 XT | Notes |
 |---|---|---|---|
-| gemma3:12b (default) | 8.1 GB | 48 tokens/s; about 11.4 GB VRAM and 7 GB RAM at num_ctx 32768 | Good Swedish (EuroEval) |
-| qwen2.5:14b | 9.0 GB | 38 tokens/s; Ollama reports 14.4 GB VRAM at num_ctx 32768 | Nearly fills a 16 GB card |
-| qwen3:14b, gemma4:12b | 9.3 / 7.6 GB | not measured yet | Candidates, compare with `lp.py compare` |
+| **gemma4:12b** (default) | 7.6 GB | 50 tokens/s; about 12.9 GB VRAM at num_ctx 32768 | The most complete Swedish minutes in the comparison below |
+| gemma3:12b | 8.1 GB | 49 tokens/s; about 11.2 GB VRAM | Good Swedish (EuroEval), a little less complete |
+| qwen3:14b | 9.3 GB | 30 tokens/s; fills a 16 GB card | Missed all action items; twice as slow |
+| qwen2.5:14b | 9.0 GB | 23 tokens/s; fills a 16 GB card | Some language errors and a wrong year; the slowest |
 
-A summary of a 25-minute meeting took 25 seconds with gemma3:12b on this GPU. Summary quality cannot be measured
+A summary of a 25-minute meeting took about 25 seconds with gemma4:12b on this GPU. Summary quality cannot be measured
 automatically like transcription can: use `python lp.py compare <meeting>` and read the results side by side.
 `lp.py compare` also prints each model's speed and GPU memory.
 
@@ -187,13 +188,30 @@ The new settings are slightly better, and they fix the case where Whisper skippe
 
 ### Summary models (25-minute Swedish meeting, num_ctx 32768)
 
-| Model | Time | Speed | VRAM reported by Ollama | VRAM measured (LibreHardwareMonitor) |
-|---|---|---|---|---|
-| **gemma3:12b** (default) | 25 s | 48 tokens/s | 7.7 GB | about 11.4 GB, plus about 7 GB of RAM |
-| qwen2.5:14b | 53 s | 38 tokens/s | 14.4 GB | not measured |
+Measured on 2026-09-27: the same 25-minute Swedish debate (Riksdag HD108), the same prompt, one after another.
+The minutes are saved in `tests/results/llm_compare_2026-09-27/` (open `compare.html` to read them side by side).
 
-The memory includes the context. **Ollama's own number is too low**: the measured increase on the card was
-11.4 GB for gemma3:12b, because Ollama leaves out working buffers. Plan with the measured number.
+| Model | Time | Speed | VRAM reported by Ollama | VRAM measured (LibreHardwareMonitor) | RAM while loaded |
+|---|---|---|---|---|---|
+| **gemma4:12b** (default) | 28 s | 50 tokens/s | 8.0 GB | +12.9 GB (the card was full) | +9.6 GB |
+| gemma3:12b | 26 s | 49 tokens/s | 7.7 GB | +11.2 GB | +7.8 GB |
+| qwen3:14b | 53 s | 30 tokens/s | 13.7 GB | +12.9 GB (the card was full) | +9.9 GB |
+| qwen2.5:14b | 62 s | 23 tokens/s | 14.4 GB | +12.9 GB (the card was full) | +10.1 GB |
+
+How the minutes compared (read by hand):
+
+- **gemma4:12b**: the most complete. It named all three debaters and their positions, turned the three dates in
+  the government's planning process into action items, and listed three distinct open questions.
+- **gemma3:12b**: correct and clear, but it mentioned the other members only as "several members" and had two
+  action items and two open questions.
+- **qwen3:14b**: a good summary, but no action items at all, and two of its open questions said the same thing.
+- **qwen2.5:14b**: some language errors ("understrydde", "stationeringslägen"), a probably wrong year, and one claim
+  that did not quite match the debate.
+
+The memory includes the context. **Ollama's own number is too low**, because it leaves out working buffers: plan
+with the measured number. Three models stopped at +12.9 GB because the 16 GB card was then full (the desktop
+already used 2.6 GB). They still ran fully on the GPU, but if another program uses a lot of GPU memory at the same
+time, part of the model can spill over to the CPU and the summary gets slower.
 While the model is loaded, Windows also shows about 7 GB more RAM in use. LokalProtokoll unloads the model as
 soon as the minutes are written (`summarize.unload_after`); without that, Ollama keeps it loaded for 5 minutes.
 
@@ -203,8 +221,8 @@ soon as the minutes are written (`summarize.unload_after`); without that, Ollama
 |---|---|---|---|
 | Transcription, KB-Whisper large | GPU | 1.8 GB VRAM, 0.6 GB RAM | about 7 min |
 | Speaker detection, TitaNet small | CPU (about half) | about 1 GB RAM | about 4 min |
-| Summary, gemma3:12b | GPU | about 11.4 GB VRAM and 7 GB RAM, freed afterwards | about 1 min |
-| **Total** | | at most about 11.4 GB VRAM at once (the steps run one after another) | **about 12 min** |
+| Summary, gemma4:12b | GPU | up to the whole free VRAM (12.9 GB here) and about 10 GB RAM, freed afterwards | about 1 min |
+| **Total** | | the summary uses the most VRAM; the steps run one after another | **about 12 min** |
 
 The same KB-Whisper large model on the **CPU only** (whisper.cpp without Vulkan) ran at about 2x real time on
 this CPU: about 30 minutes for a 1-hour meeting.
@@ -240,8 +258,8 @@ model with its context. Recording itself needs almost nothing (see "Everyday use
 
 | Your computer | Speech to text | Summary | Notes |
 |---|---|---|---|
-| GPU with 16 GB or more (like the RX 7800 XT) | KB-Whisper large | gemma3:12b, num_ctx 32768 | The defaults. About 12 minutes per meeting hour. |
-| GPU with 8-12 GB | KB-Whisper large | gemma3:12b with `num_ctx = 16384`, or a smaller model | gemma3:12b needs about 11.4 GB at 32768, and the desktop itself uses 1-2 GB. A smaller context needs less (not measured yet). If it does not fit, Ollama runs part of the model on the CPU, which is much slower: check that `lp.py compare` shows GPU 100%. Longer meetings are split into parts automatically. |
+| GPU with 16 GB or more (like the RX 7800 XT) | KB-Whisper large | gemma4:12b, num_ctx 32768 | The defaults. About 12 minutes per meeting hour. |
+| GPU with 8-12 GB | KB-Whisper large | gemma4:12b or gemma3:12b with `num_ctx = 16384`, or a smaller model | The 12B models need 11-13 GB at 32768, and the desktop itself uses 1-2 GB. A smaller context needs less (not measured yet). If it does not fit, Ollama runs part of the model on the CPU, which is much slower: check that `lp.py compare` shows GPU 100%. Longer meetings are split into parts automatically. |
 | GPU with 4-6 GB | KB-Whisper medium or small (0.24-1.1 GB) | a 4B model (for example gemma3:4b), or the summary on the CPU | Not measured yet. |
 | No usable GPU | KB-Whisper small (medium if you can wait) | a small model on the CPU | Large runs at about 2x real time on a 6-core CPU; small is several times faster (not measured on CPU yet). |
 

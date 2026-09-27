@@ -9,19 +9,27 @@
 - [x] Step 3: desktop app (`lp.py app`), hidden from screen sharing by default
 - [ ] Step 4: live transcription (maybe never)
 - [x] Benchmark with test recordings (`tests/`), results and model guide in `docs/MODELS.md`
+- [x] Corrections in the app (speakers, text, name, minutes), installer (`setup.ps1`), git
 
 ## Testing still needed (Step 2)
 
 - A real online meeting with 2-4 other people, 15+ minutes, recorded with `record --speakers N`.
   - Does diarization separate the real voices on the system track?
   - Speed and num_ctx on a long meeting.
-  - Swedish summary quality: run `compare` with qwen3:14b and gemma4:12b and pick a default.
+  - Swedish summary quality on a real meeting: does gemma4:12b (chosen on a Riksdag debate) also do well there?
 - Automatic speaker count is unreliable on short recordings; check how it behaves on long ones.
+
+## Next (chosen)
+
+- **Voice enrollment**: save a person's voice once (from a voice sample in the Speakers tab), so they are named
+  automatically in later meetings. sherpa-onnx can compare the TitaNet voice fingerprints already used for
+  speaker detection.
+- **Search across all meetings**: find what was said or decided in any meeting ("budget", a name), from the app.
 
 ## Later
 
 - **Benchmark on other hardware**: the numbers in docs/MODELS.md are from one computer (RX 7800 XT). Not
-  measured yet: GPUs with 4-8 GB, CPU-only speed for KB-Whisper small/medium, qwen3:14b and gemma4:12b.
+  measured yet: GPUs with 4-8 GB, CPU-only speed for KB-Whisper small/medium.
 - **Automatic speaker count**: still off by a few speakers on long meetings (threshold 1.0). Could use a
   different clustering method; measure with `tests/tune_threshold.py`.
 
@@ -29,8 +37,6 @@
   is transcribed by KB-Whisper as a Swedish *translation* (seen with an English YouTube clip). Possible fix:
   detect the language per stretch of speech and send English parts to the English model.
 
-- **Voice enrollment**: save a voice once, so it is named automatically in later meetings. Builds on the voice
-  samples; sherpa-onnx can compare speaker embeddings.
 - **Vocabulary prompt**: a list of names and terms Whisper often gets wrong (company names, colleagues). They
   can already be added to the starting prompt (`transcribe.prompt_sv` / `prompt_en` in config.toml); a
   separate list, or a field in the app, would make it easier.

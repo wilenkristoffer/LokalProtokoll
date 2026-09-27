@@ -7,7 +7,7 @@
   python lp.py rediarize <meeting folder> [--speakers 3] [--threshold 1.0]
   python lp.py rename <meeting folder> [1="Anna" 2="Erik"] [--summarize]
   python lp.py summarize <meeting folder> [--llm qwen3:14b]
-  python lp.py compare <meeting folder> [--models gemma3:12b qwen3:14b]
+  python lp.py compare <meeting folder> [--models gemma4:12b qwen3:14b]
 """
 
 import argparse
