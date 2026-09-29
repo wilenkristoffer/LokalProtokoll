@@ -132,6 +132,12 @@ The rest of the window:
     summary with the names.
 
   Copy puts the text on the clipboard. The panel closes with the X button or Esc.
+
+  The `...` button in the top right corner of the panel deletes what you no longer need once the minutes are
+  done: **Delete recording** (the audio files, about 350 MB per hour of recording), **Delete speaker voices** (the voice sample
+  of each speaker), or both. The transcript and the minutes stay. If people in the meeting also have a saved voice,
+  it asks whether to delete them from memory too. Without the recording you can no longer listen to the meeting,
+  redo the speakers or save a voice from it.
 - **The `...` menu** on a meeting: view minutes or transcript, name speakers, rewrite the minutes, rename the
   meeting, redo the speakers with a new count, find and replace a word in the whole meeting, open the folder, or
   delete the meeting.
@@ -182,7 +188,7 @@ The output goes to `meetings\<date>_<time>_<name>\`:
 | `speakers.html`, `speakers\` | A voice sample per speaker, with play buttons (see "Naming the speakers") |
 | `whisper.json`, `diarization.json` | Raw output from each stage |
 | `whisper.log` | Full whisper.cpp output (look here for GPU info and errors) |
-| `audio_16k.wav` | The converted audio (about 115 MB per hour; you can delete it when you are done) |
+| `audio_16k.wav` | The converted audio (about 115 MB per hour; delete it with "Delete recording" when you are done) |
 
 The time taken by each stage is printed at the end, along with its speed compared to real time.
 

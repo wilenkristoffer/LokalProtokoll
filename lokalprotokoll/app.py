@@ -23,14 +23,16 @@ import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
+import tkinter as tk
 from tkinter import filedialog, messagebox
+from tkinter import font as tkfont
 
 import customtkinter as ctk
 
-from . import output, recorder
+from . import output, recorder, speakers
 from .config import PROJECT_DIR, resolve
 from .theme import (BG, CARD, CHECK, DOT, INK, INK_HOVER, LINE, MIDDOT, MUTED, OTHERS, RED, RED_HOVER,
-                    SQUARE, YOU, fmt_duration, restyle_segments, speaker_color)
+                    SQUARE, YOU, fmt_duration, pick, restyle_segments, speaker_color)
 from .viewer import Viewer
 
 LEFT_WIDTH, VIEWER_WIDTH = 380, 640
@@ -92,6 +94,45 @@ def app_icon_image(size=64):
         y = (18 + 12 * i) * s
         d.rounded_rectangle((14 * s, y, (14 + length) * s, y + 6 * s), radius=3 * s, fill="#E9E4DA")
     return img
+
+
+def write_icon(path):
+    """Save the app icon as a .ico (window, taskbar and desktop shortcut)."""
+    app_icon_image(256).save(path, sizes=[(16, 16), (32, 32), (48, 48), (256, 256)])
+    return path
+
+
+# ---------------------------------------------------------------- one window only
+
+SHOW_EVENT = r"Local\LokalProtokoll.Show"
+
+
+def claim_single_instance():
+    """Returns a handle to wait on when this is the first LokalProtokoll, or None
+    when one is already running (it has then been asked to show its window)."""
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateEventW.restype = ctypes.c_void_p
+        handle = kernel32.CreateEventW(None, False, False, SHOW_EVENT)
+        if handle and ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+            kernel32.SetEvent(ctypes.c_void_p(handle))
+            kernel32.CloseHandle(ctypes.c_void_p(handle))
+            return None
+        return handle or -1
+    except (AttributeError, OSError):
+        return -1  # not Windows: no check
+
+
+def watch_for_second_start(handle, show_requested):
+    """Set show_requested each time another start of the app signals the event."""
+    if handle == -1:
+        return
+    kernel32 = ctypes.WinDLL("kernel32")
+
+    def wait():
+        while kernel32.WaitForSingleObject(ctypes.c_void_p(handle), 0xFFFFFFFF) == 0:
+            show_requested.set()
+    threading.Thread(target=wait, daemon=True).start()
 
 
 # ---------------------------------------------------------------- background work
@@ -454,9 +495,15 @@ class Tooltip:
     def show(self, event=None):
         if self.win is not None:
             return
-        self.win = ctk.CTkToplevel(self.app)
+        # A plain Toplevel: in dark mode CTkToplevel redraws its title bar with
+        # update() inside its constructor. That handled the next Enter event before
+        # self.win was set, so a second tooltip opened and the first was never closed.
+        self.win = tk.Toplevel(self.app, bg=pick(INK))
         self.win.overrideredirect(True)
-        self.win.transient(self.app)
+        # Topmost like system tooltips, so it is above the app also when that is
+        # "Keep on top". No transient(): on a window without a title bar that puts
+        # it behind the app window.
+        self.win.attributes("-topmost", True)
         ctk.CTkLabel(self.win, text=self.text, font=self.app.f_small, text_color=BG, fg_color=INK,
                      corner_radius=0, padx=8, pady=2).pack()
         self.win.geometry(f"+{self.widget.winfo_rootx()}+{self.widget.winfo_rooty() + self.widget.winfo_height() + 4}")
@@ -481,6 +528,94 @@ class Tooltip:
         if self.win is not None and (force or not self._pointer_over_widget()):
             self.win.destroy()
             self.win = None
+
+
+class FittedName(ctk.CTkFrame):
+    """One line of text cut to the width it gets, with "..." at the end. While the
+    mouse is over a cut text, the text slides to the left to show the rest, and
+    slides back when it reaches the end."""
+
+    ELLIPSIS = chr(0x2026)
+    DELAY, STEP, FRAME, PAUSE = 500, 1, 16, 1200  # ms before start, px per frame, ms per frame, ms at the ends
+
+    def __init__(self, parent, text, font, text_color):
+        super().__init__(parent, fg_color="transparent", corner_radius=0, width=1)
+        self.text = text
+        self.label = ctk.CTkLabel(self, text=text, font=font, text_color=text_color, anchor="w", padx=0)
+        self.scale = self.label._get_widget_scaling()
+        # Measure with the font the label really draws with. Measuring with the
+        # unscaled font and scaling the result is a few percent off, because the
+        # scaled size is rounded to whole pixels (13 * 1.5 = 19.5 -> 20).
+        self.font = tkfont.Font(self, font=font.create_scaled_tuple(self.scale))
+        # The label is placed, not packed, so it can be wider than this frame and
+        # move inside it; the frame clips it. The frame height is set by hand.
+        self.configure(height=round(self.label.winfo_reqheight() / self.scale))
+        self.label.place(x=0, y=0)
+        self.offset, self.job = 0, None
+        for widget in (self, self.label):
+            widget.bind("<Enter>", self._enter, add="+")
+        self.bind("<Configure>", lambda e: self._reset())
+
+    def bind_all_parts(self, sequence, func):
+        for widget in (self, self.label):
+            widget.bind(sequence, func, add="+")
+            widget.configure(cursor="hand2")
+
+    def _overflow(self):
+        """How many screen pixels of the full text do not fit."""
+        return self.font.measure(self.text) - self.winfo_width()
+
+    def _fitted(self):
+        if self._overflow() <= 0:
+            return self.text
+        room = self.winfo_width() - self.font.measure(self.ELLIPSIS) - 2
+        low, high = 0, len(self.text)
+        while low < high:  # the longest start of the text that fits
+            mid = (low + high + 1) // 2
+            if self.font.measure(self.text[:mid].rstrip()) <= room:
+                low = mid
+            else:
+                high = mid - 1
+        return self.text[:low].rstrip() + self.ELLIPSIS
+
+    def _reset(self):
+        if self.job:
+            self.after_cancel(self.job)
+            self.job = None
+        self.offset = 0
+        self.label.configure(text=self._fitted())
+        self.label.place_configure(x=0)
+
+    def _pointer_inside(self):
+        inside = self.winfo_containing(*self.winfo_pointerxy())
+        return bool(inside and str(inside).startswith(str(self)))
+
+    def _enter(self, event=None):
+        if self.job is None and self._overflow() > 0:
+            self.job = self.after(self.DELAY, self._start)
+
+    def _start(self):
+        if not self._pointer_inside():
+            self._reset()
+            return
+        self.label.configure(text=self.text)
+        self._slide(-1)
+
+    def _slide(self, direction):
+        # Checked every frame instead of using <Leave>: the moving label fires
+        # Leave and Enter by itself while the mouse stands still.
+        if not self._pointer_inside():
+            self._reset()
+            return
+        # Screen pixels: place_configure() is plain tkinter and is not scaled like
+        # CTk's place().
+        end = -(self._overflow() + 4)
+        self.offset = max(end, min(0, self.offset + direction * self.STEP * self.scale))
+        self.label.place_configure(x=round(self.offset))
+        if (direction < 0 and self.offset <= end) or (direction > 0 and self.offset >= 0):
+            self.job = self.after(self.PAUSE, lambda: self._slide(-direction))
+        else:
+            self.job = self.after(self.FRAME, lambda: self._slide(direction))
 
 
 class Tray:
@@ -529,6 +664,7 @@ class App(ctk.CTk):
         self.closed_width = LEFT_WIDTH
         self.rows = {}
         self.told_about_tray = False
+        self.show_requested = threading.Event()  # set when the app is started a second time
 
         self.title("LokalProtokoll")
         self.geometry(f"{LEFT_WIDTH}x660")
@@ -586,8 +722,7 @@ class App(ctk.CTk):
 
     def _set_window_icon(self):
         try:
-            path = Path(tempfile.gettempdir()) / "lokalprotokoll.ico"
-            app_icon_image(256).save(path, sizes=[(16, 16), (32, 32), (48, 48), (256, 256)])
+            path = write_icon(Path(tempfile.gettempdir()) / "lokalprotokoll.ico")
             # CustomTkinter sets its own icon after ~200 ms; set ours after that.
             self.after(300, lambda: self.iconbitmap(str(path)))
         except Exception:
@@ -883,6 +1018,11 @@ class App(ctk.CTk):
 
     def redo_speakers(self, item, widget):
         folder = item["folder"]
+        if not speakers.has_audio(output.load_meeting(folder), folder):
+            messagebox.showinfo("Redo speakers", "The recording of this meeting was deleted, so the speakers "
+                                "cannot be found again. You can still change who said what in the transcript.",
+                                parent=self)
+            return
 
         def run(choice):
             meeting = output.load_meeting(folder)
@@ -926,6 +1066,74 @@ class App(ctk.CTk):
             items = [(ICONS["speakers"], "No saved voices yet. Tick \"Remember voice\" for a named speaker.",
                       lambda: None, False)]
         PopupMenu(self, items, *self._popup_at(widget))
+
+    def delete_audio_menu(self, folder, widget):
+        """Delete the recording and/or the voice samples of a processed meeting (the
+        "..." button in the top right corner of the viewer)."""
+        from . import voices
+        meeting = output.load_meeting(folder)
+        recording = bool(speakers.audio_files(meeting, folder))
+        samples = speakers.has_samples(folder) or bool(voices.voices_in_meeting(self.cfg, folder, meeting))
+        items = []
+        if recording:
+            items.append((ICONS["delete"], "Delete recording", lambda: self.delete_audio(folder, True, False), True))
+        if samples:
+            items.append((ICONS["delete"], "Delete speaker voices", lambda: self.delete_audio(folder, False, True), True))
+        if recording and samples:
+            items.append((ICONS["delete"], "Delete recording and speaker voices",
+                          lambda: self.delete_audio(folder, True, True), True))
+        if not items:
+            items = [(ICONS["delete"], "The recording and the speaker voices are already deleted.", lambda: None, False)]
+        PopupMenu(self, items, widget.winfo_rootx() + widget.winfo_width(),
+                  widget.winfo_rooty() + widget.winfo_height() + 4, align_right=True)
+
+    def delete_audio(self, folder, recording, samples):
+        from . import edit, voices
+        if not self._can_edit(folder):
+            return
+        meeting = output.load_meeting(folder)
+        what = {(True, False): "the recording", (False, True): "the speaker voices",
+                (True, True): "the recording and the speaker voices"}[(recording, samples)]
+        text = f"Delete {what} of \"{meeting['name']}\"? The transcript and the minutes stay.\n\n"
+        if recording:
+            text += "You can no longer listen to the meeting, redo the speakers or save a voice from it. "
+            source = Path(meeting.get("source_audio", ""))
+            if meeting.get("source_audio") and source.is_file():
+                text += f"The file you imported ({source.name}) is not deleted. "
+        if samples:
+            text += "The Speakers tab can no longer play each person's voice. "
+        saved = voices.voices_in_meeting(self.cfg, folder, meeting) if samples else []
+        forget = []
+        if saved:
+            names = ", ".join(v["name"] for v in saved)
+            one = len(saved) == 1
+            text += (f"\n\n{names} {'is' if one else 'are'} also saved in memory and named automatically in later "
+                     f"meetings. Delete {'this voice' if one else 'these voices'} from memory too?\n\n"
+                     "Yes: delete from memory as well\nNo: keep in memory")
+            answer = messagebox.askyesnocancel("Delete " + what, text.strip(), icon="warning", parent=self)
+            if answer is None:
+                return
+            forget = saved if answer else []
+        elif not messagebox.askyesno("Delete " + what, text.strip(), icon="warning", parent=self):
+            return
+        if self.viewer_open and self.viewer.folder == Path(folder):
+            self.viewer.stop_audio()  # the player keeps the wav open, and Windows cannot delete an open file
+        freed = 0
+        try:
+            if recording:
+                freed += edit.delete_recording(folder)
+            if samples:
+                freed += edit.delete_voice_samples(folder)
+            for v in forget:
+                voices.delete_voice(self.cfg, v["name"])
+        except OSError as e:
+            messagebox.showerror("Delete " + what, f"Could not delete everything:\n{e}", parent=self)
+        self._after_edit(folder)
+        done = f"Deleted {what} ({freed / 1e6:.0f} MB)."
+        if forget:
+            done += " Forgot the saved voice" + ("s of " if len(forget) > 1 else " of ") + \
+                ", ".join(v["name"] for v in forget) + "."
+        messagebox.showinfo("Delete " + what, done, parent=self)
 
     def sentence_menu(self, folder, index, x, y):
         """Opened by clicking a sentence in the Transcript tab."""
@@ -980,9 +1188,14 @@ class App(ctk.CTk):
         row = ctk.CTkFrame(self.list_frame, fg_color=CARD, corner_radius=12, border_width=1, border_color=LINE)
         row.pack(fill="x", pady=3, padx=4)
         self.rows[str(item["folder"])] = row
+        # Packed before the text: pack hands out space in packing order, so a long
+        # name would otherwise push the button out of the row.
+        more = IconButton(row, self, ICONS["more"], "", None, text_color=MUTED, pad=8)
+        more.command = lambda: self.meeting_menu(item, more)
+        more.pack(side="right", padx=(0, 8))
         text = ctk.CTkFrame(row, fg_color="transparent")
         text.pack(side="left", fill="x", expand=True, padx=(12, 4), pady=8)
-        name = ctk.CTkLabel(text, text=item["name"], font=self.f_bold, text_color=INK, anchor="w")
+        name = FittedName(text, item["name"], self.f_bold, INK)
         name.pack(fill="x")
         try:
             when = datetime.strptime(item["date"], "%Y-%m-%d %H:%M").strftime("%d %b %H:%M")
@@ -996,14 +1209,13 @@ class App(ctk.CTk):
         meta_label = ctk.CTkLabel(text, text=meta, font=self.f_small, text_color=MUTED, anchor="w")
         meta_label.pack(fill="x")
 
-        more = IconButton(row, self, ICONS["more"], "", None, text_color=MUTED, pad=8)
-        more.command = lambda: self.meeting_menu(item, more)
-        more.pack(side="right", padx=(0, 8))
         if item["processed"]:
             # Clicking the meeting opens its minutes in the panel.
-            for widget in (row, text, name, meta_label):
-                widget.bind("<ButtonRelease-1>", lambda e: self.open_viewer(item["folder"], "minutes"))
+            open_minutes = lambda e: self.open_viewer(item["folder"], "minutes")
+            for widget in (row, text, meta_label):
+                widget.bind("<ButtonRelease-1>", open_minutes)
                 widget.configure(cursor="hand2")
+            name.bind_all_parts("<ButtonRelease-1>", open_minutes)
 
     # ----- status updates -----
     def show_card(self, name):
@@ -1018,6 +1230,9 @@ class App(ctk.CTk):
 
     def tick(self):
         self._handle_tray()
+        if self.show_requested.is_set():
+            self.show_requested.clear()
+            self.show_window()
         st = self.worker.status
         state = st["state"]
         if self.tray:
@@ -1172,9 +1387,16 @@ class App(ctk.CTk):
 
 
 def run(cfg, config_path=None):
+    handle = claim_single_instance()
+    if handle is None:
+        return  # already running: that window comes to the front instead
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        # Our own taskbar identity, so the taskbar shows our icon and not Python's.
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("LokalProtokoll")
     except (AttributeError, OSError):
         pass
     ctk.set_appearance_mode("system")
-    App(cfg, config_path).mainloop()
+    window = App(cfg, config_path)
+    watch_for_second_start(handle, window.show_requested)
+    window.mainloop()

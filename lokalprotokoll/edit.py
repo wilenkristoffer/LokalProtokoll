@@ -2,7 +2,8 @@
 
 These are quick (no models run), so the app calls them directly. After a change
 that affects who said what, the minutes are marked as out of date
-(meeting["summary_stale"]) until they are rewritten.
+(meeting["summary_stale"]) until they are rewritten. Also deleting the audio and
+the voice samples of a meeting when you are done with them.
 """
 
 import re
@@ -13,7 +14,7 @@ from . import output, speakers
 
 def _save(meeting, folder, samples=False):
     output.write_transcript_md(meeting, folder)
-    if samples:
+    if samples and speakers.has_samples(folder):  # deleted voice samples are not made again
         speakers.make_samples(meeting, folder)
     else:
         speakers.write_html(meeting, folder)
@@ -97,6 +98,34 @@ def rename_meeting(folder, name):
             summary.write_text("\n".join(lines), encoding="utf-8")
     _save(meeting, folder)
     return meeting
+
+
+def delete_recording(folder):
+    """Delete the meeting's audio when you are done with it. The transcript, the
+    minutes and the voice samples stay. Returns the bytes freed."""
+    meeting = output.load_meeting(folder)
+    freed = 0
+    for path in speakers.audio_files(meeting, folder):
+        freed += path.stat().st_size
+        path.unlink()
+    return freed
+
+
+def delete_voice_samples(folder):
+    """Delete the short voice sample of each speaker (speakers/ and speakers.html).
+    Saved voices are separate: see voices.delete_voice. Returns the bytes freed."""
+    freed = 0
+    clip_dir = Path(folder, "speakers")
+    for path in clip_dir.glob("*.wav"):
+        freed += path.stat().st_size
+        path.unlink()
+    if clip_dir.exists() and not any(clip_dir.iterdir()):
+        clip_dir.rmdir()
+    Path(folder, "speakers.html").unlink(missing_ok=True)
+    meeting = output.load_meeting(folder)
+    meeting["voice_samples_deleted"] = True  # so "lp.py rename" does not cut them again
+    output.save_meeting(meeting, folder)
+    return freed
 
 
 def save_minutes(folder, text):

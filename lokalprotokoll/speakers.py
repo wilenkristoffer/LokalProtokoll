@@ -45,8 +45,29 @@ def clip_path(out_dir, speaker):
     return Path(out_dir, "speakers", f"speaker_{speaker}.wav")
 
 
+def has_samples(out_dir):
+    return any(Path(out_dir, "speakers").glob("speaker_*.wav"))
+
+
+def audio_files(meeting, out_dir):
+    """The meeting's audio files that still exist: the mix, the tracks and the raw recording."""
+    names = {"audio_16k.wav", "mic.wav", "system.wav", *meeting.get("track_files", {}).values()}
+    return [p for p in (Path(out_dir, n) for n in sorted(names)) if p.exists()]
+
+
+def has_audio(meeting, out_dir):
+    """True if the audio the speakers are found in and cut from is still there
+    (it can be deleted after processing)."""
+    names = set(meeting.get("track_files", {}).values()) or {"audio_16k.wav"}
+    return all(Path(out_dir, n).exists() for n in names)
+
+
 def make_samples(meeting, out_dir):
-    """Write speakers/speaker_N.wav for every speaker, then speakers.html."""
+    """Write speakers/speaker_N.wav for every speaker, then speakers.html.
+    Without the audio (deleted), the clips there are kept as they are."""
+    if not has_audio(meeting, out_dir):
+        write_html(meeting, out_dir)
+        return
     stats = speaker_stats(meeting)
     clip_dir = Path(out_dir, "speakers")
     clip_dir.mkdir(exist_ok=True)
@@ -78,6 +99,9 @@ def make_samples(meeting, out_dir):
 
 
 def write_html(meeting, out_dir, stats=None):
+    if not has_samples(out_dir):  # the voice samples were deleted (or never made)
+        Path(out_dir, "speakers.html").unlink(missing_ok=True)
+        return
     stats = stats or speaker_stats(meeting)
     rows = ""
     for speaker, s in stats.items():

@@ -15,12 +15,14 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from . import output, speakers
+from .player import Player
 from .theme import (BG, BOX, BOX_CHECKED, BULLET, CARD, CHECK, CLOSE, INK, INK_HOVER, LINE, MIDDOT, MUTED, PLAY,
                     SQUARE, fmt_duration, pick, restyle_segments, speaker_color)
 
 STALE = ("#F3E5C4", "#3A3222")  # soft amber: "these minutes are out of date"
 INLINE = re.compile(r"\*\*[^*\n]+\*\*|`[^`\n]+`|(?<![\w*])[*_][^*_\n]+[*_](?![\w*])")
 TABS = {"Minutes": "minutes", "Transcript": "transcript", "Speakers": "speakers"}
+GLYPH_PLAY, GLYPH_PAUSE, GLYPH_STOP = "\ue768", "\ue769", "\ue71a"  # Segoe Fluent Icons
 
 
 def play_sound(path=None):
@@ -43,14 +45,26 @@ class Viewer(ctk.CTkFrame):
         self.meeting = None
         self.view = None
         self.speaker_panel = None
+        self.player = Player()
+        self.player_timer = None
 
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.pack(fill="x", padx=(22, 12), pady=(14, 0))
         self.title_label = ctk.CTkLabel(head, text="", font=app.f_view_title, text_color=INK, anchor="w")
         self.title_label.pack(side="left", fill="x", expand=True)
-        ctk.CTkButton(head, text=CLOSE, width=30, height=30, corner_radius=8, font=app.f_body,
-                      fg_color="transparent", hover_color=LINE, text_color=MUTED,
-                      command=app.close_viewer).pack(side="right")
+        self.close_btn = ctk.CTkButton(head, text=CLOSE, width=30, height=30, corner_radius=8, font=app.f_body,
+                                       fg_color="transparent", hover_color=LINE, text_color=MUTED,
+                                       command=app.close_viewer)
+        self.close_btn.pack(side="right")
+        # Delete the recording and/or the voice samples when you are done with them.
+        from .app import Tooltip
+        self.more_btn = app.icon_button(head, "more", "", lambda: app.delete_audio_menu(self.folder, self.more_btn))
+        Tooltip(app, self.more_btn, "Delete recording or speaker voices")
+        # Listen to the meeting: play/pause, then stop and the time once started.
+        self.play_btn = app.icon_button(head, "play", "", self.toggle_meeting_audio)
+        self.stop_btn = app.icon_button(head, "play", "", self.stop_meeting_audio)
+        self.stop_btn.set_style(glyph=GLYPH_STOP)
+        self.time_label = ctk.CTkLabel(head, text="", font=app.f_small, text_color=MUTED)
         self.meta_label = ctk.CTkLabel(self, text="", font=app.f_small, text_color=MUTED, anchor="w")
         self.meta_label.pack(fill="x", padx=22)
 
@@ -136,6 +150,8 @@ class Viewer(ctk.CTkFrame):
 
     # ----- opening -----
     def open(self, folder, view="minutes"):
+        if self.folder != Path(folder):
+            self.stop_meeting_audio()
         self.folder = Path(folder)
         self.meeting = output.load_meeting(self.folder)
         m = self.meeting
@@ -149,14 +165,72 @@ class Viewer(ctk.CTkFrame):
         self.meta_label.configure(text=f"{when}  {MIDDOT}  {fmt_duration(m['duration_s'])}  {MIDDOT}  "
                                        f"{count} speaker{'s' if count != 1 else ''}  {MIDDOT}  {m['language']}")
         self.bar.pack(fill="x", padx=20, pady=(10, 8), after=self.meta_label)
+        self.more_btn.pack(side="right", padx=(0, 2), after=self.close_btn)
+        if self._audio_path().exists():
+            if not self.play_btn.winfo_manager():  # re-packing would move it past the stop button
+                self.play_btn.pack(side="right", padx=(0, 4))
+        else:
+            self.play_btn.pack_forget()
         self.show(view)
 
     def stop_audio(self):
-        """Stop a playing voice sample (and reset its stop button to play)."""
+        """Stop the meeting audio and a playing voice sample (and reset its button)."""
+        self.stop_meeting_audio()
+        self.stop_voice_sample()
+
+    def stop_voice_sample(self):
         if self.speaker_panel is not None:
             self.speaker_panel.stop_playing()
         else:
             play_sound(None)
+
+    # ----- listening to the whole meeting -----
+    def _audio_path(self):
+        return self.folder / "audio_16k.wav"  # the mixed track (mic + system for a recording)
+
+    def toggle_meeting_audio(self):
+        p = self.player
+        if p.playing:
+            p.pause()
+        elif p.active:
+            self.stop_voice_sample()
+            p.resume()
+        else:
+            self.stop_voice_sample()
+            try:
+                p.play(self._audio_path())
+            except Exception as e:  # no output device, unreadable file
+                p.stop()
+                messagebox.showerror("Play", f"Could not play the audio:\n{e}", parent=self.app)
+                return
+            self.stop_btn.pack(side="right", padx=(0, 2), before=self.play_btn)
+            self.time_label.pack(side="right", padx=(0, 6), after=self.play_btn)
+            self._tick_player()
+        self._player_style()
+
+    def pause_meeting_audio(self):
+        self.player.pause()
+        self._player_style()
+
+    def stop_meeting_audio(self):
+        self.player.stop()
+        if self.player_timer is not None:
+            self.after_cancel(self.player_timer)
+            self.player_timer = None
+        self.stop_btn.pack_forget()
+        self.time_label.pack_forget()
+        self._player_style()
+
+    def _player_style(self):
+        self.play_btn.set_style(glyph=GLYPH_PAUSE if self.player.playing else GLYPH_PLAY)
+
+    def _tick_player(self):
+        if self.player.finished:
+            self.stop_meeting_audio()
+            return
+        pos, total = self.player.seconds()
+        self.time_label.configure(text=f"{output.fmt_time(pos)} / {output.fmt_time(total)}")
+        self.player_timer = self.after(250, self._tick_player)
 
     def reload(self, keep_scroll=False):
         """Show the meeting again after a change. keep_scroll keeps the reading position
@@ -239,6 +313,9 @@ class Viewer(ctk.CTkFrame):
     def show_log(self, title, text):
         """Show plain text (a processing log) in the panel, without tabs."""
         play_sound(None)
+        self.stop_meeting_audio()
+        self.play_btn.pack_forget()
+        self.more_btn.pack_forget()
         self.folder, self.meeting, self.view = None, None, "log"
         if self.speaker_panel is not None:
             self.speaker_panel.destroy()
@@ -255,6 +332,9 @@ class Viewer(ctk.CTkFrame):
         """Search results from all meetings. Clicking a hit opens the meeting there."""
         from .search import snippet, terms_of
         play_sound(None)
+        self.stop_meeting_audio()
+        self.play_btn.pack_forget()
+        self.more_btn.pack_forget()
         self.folder, self.meeting, self.view = None, None, "search"
         if self.speaker_panel is not None:
             self.speaker_panel.destroy()
@@ -467,11 +547,14 @@ class SpeakerPanel(ctk.CTkFrame):
         self.playing = None  # (button, id of the timer that resets it when the clip ends)
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.pack(fill="x", padx=8, pady=(2, 6))
-        ctk.CTkLabel(head, text="Play each voice and type a name.", font=app.f_small,
+        has_samples = speakers.has_samples(folder)
+        ctk.CTkLabel(head, text="Play each voice and type a name." if has_samples else
+                     "The voice samples were deleted. Type a name for each speaker.", font=app.f_small,
                      text_color=MUTED).pack(side="left")
         self.voices_btn = app.icon_button(head, "speakers", "Saved voices", self.show_saved_voices)
         self.voices_btn.pack(side="right")
         recognized = meeting.get("recognized", {})
+        can_remember = speakers.has_audio(meeting, folder)  # a voice is saved from the recording
 
         rows = ctk.CTkScrollableFrame(self, fg_color="transparent", scrollbar_button_color=LINE,
                                       scrollbar_button_hover_color=MUTED)
@@ -486,6 +569,8 @@ class SpeakerPanel(ctk.CTkFrame):
             button = ctk.CTkButton(row, text=PLAY, width=38, height=38, corner_radius=19, border_spacing=0,
                                    fg_color=color, hover_color=color, text_color="#FFFFFF", font=app.f_body)
             button.configure(command=lambda b=button, c=clip: self.toggle_play(b, c))
+            if not clip.exists():
+                button.configure(text="", state="disabled")  # keeps the speaker's color
             button.pack(side="left", padx=(12, 10), pady=10)
             col = ctk.CTkFrame(row, fg_color="transparent")
             col.pack(side="left", fill="x", expand=True, pady=8, padx=(0, 12))
@@ -508,6 +593,8 @@ class SpeakerPanel(ctk.CTkFrame):
             if match:
                 ctk.CTkLabel(extra, text=f"{CHECK} Recognized from saved voice ({round(100 * match['score'])}% similar)",
                              font=app.f_small, text_color=speaker_color(0), anchor="w").pack(side="left", padx=(0, 12))
+            if not can_remember:
+                continue
             self.remember[speaker] = ctk.BooleanVar(value=False)
             ctk.CTkCheckBox(extra, text="Remember voice" if not match else "Update saved voice",
                             variable=self.remember[speaker], font=app.f_small, text_color=MUTED, fg_color=INK,
@@ -528,6 +615,7 @@ class SpeakerPanel(ctk.CTkFrame):
         again (or playing another speaker) stops it."""
         was_playing = self.playing is not None and self.playing[0] is button
         self.stop_playing()
+        self.app.viewer.pause_meeting_audio()
         if was_playing or not Path(clip).exists():
             return
         play_sound(clip)

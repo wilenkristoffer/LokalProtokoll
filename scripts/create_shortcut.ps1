@@ -9,6 +9,16 @@ if (-not (Test-Path $pythonw)) {
     exit 1
 }
 
+# The same icon as the window and the tray (written to the project folder).
+$python = Join-Path $root ".venv\Scripts\python.exe"
+$icon = Join-Path $root "LokalProtokoll.ico"
+Push-Location $root
+& $python -c "import sys; from lokalprotokoll.app import write_icon; write_icon(sys.argv[1])" $icon
+Pop-Location
+if (-not (Test-Path $icon)) {
+    Write-Host "Could not create the icon; the shortcut gets Python's icon." -ForegroundColor Yellow
+}
+
 $shell = New-Object -ComObject WScript.Shell
 $targets = @(
     (Join-Path ([Environment]::GetFolderPath("Desktop")) "LokalProtokoll.lnk"),
@@ -20,6 +30,9 @@ foreach ($path in $targets) {
     $link.Arguments = "`"$(Join-Path $root 'lp.py')`" app"
     $link.WorkingDirectory = $root
     $link.Description = "Local meeting recorder and summarizer"
+    if (Test-Path $icon) {
+        $link.IconLocation = "$icon,0"
+    }
     $link.Save()
     Write-Host "Created: $path"
 }

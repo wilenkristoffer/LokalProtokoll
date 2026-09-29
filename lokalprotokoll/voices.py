@@ -99,11 +99,22 @@ def list_voices(cfg):
     return voices
 
 
+def voices_in_meeting(cfg, folder, meeting):
+    """The saved voices of people in this meeting: saved from it, or named in it
+    (by hand or recognized)."""
+    names = {n.casefold() for k, n in meeting.get("speaker_names", {}).items() if k != "0"}
+    return [v for v in list_voices(cfg)
+            if v["name"].casefold() in names or Path(folder).name in v.get("meetings", [])]
+
+
 def save_voice(cfg, name, folder, meeting, speaker):
     """Save (or improve) the voice of one speaker under name. Returns (seconds, message)."""
+    from .speakers import has_audio
     segs = [s for s in meeting["segments"] if s.get("speaker") == speaker]
     if not segs:
         return 0.0, f"No speech from speaker {speaker}."
+    if not has_audio(meeting, folder):
+        return 0.0, f"The recording of this meeting was deleted, so the voice of {name} cannot be saved from it."
     e, seconds = fingerprint(_extractor(cfg), _audio_for(folder, meeting, segs, {}), segs)
     if e is None or seconds < MIN_SAVE_S:
         return seconds, (f"Only {seconds:.0f} s of clear speech from {name}; at least {MIN_SAVE_S} s is needed "

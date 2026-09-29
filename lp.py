@@ -70,6 +70,7 @@ def run_diarization(cfg, meeting, out_dir, timer, backend, num_speakers, thresho
         print("    Speaker numbers changed, so earlier names were removed. Run rename again.")
         meeting["speaker_names"] = {k: v for k, v in names.items() if k == "0"}
     recognize_voices(cfg, meeting, out_dir)
+    meeting.pop("voice_samples_deleted", None)  # new speakers: new samples to name them by
     speakers.make_samples(meeting, out_dir)
     print(f"    Voice samples: {Path(out_dir, 'speakers.html')}")
 
@@ -324,6 +325,8 @@ def cmd_devices(cfg, args):
 
 def cmd_rediarize(cfg, args):
     meeting = output.load_meeting(args.folder)
+    if not speakers.has_audio(meeting, args.folder):
+        raise SystemExit("The recording of this meeting was deleted, so the speakers cannot be found again.")
     timer = Timer()
     run_diarization(cfg, meeting, args.folder, timer, args.diarizer, args.speakers, args.threshold)
     output.write_transcript_md(meeting, args.folder)
@@ -378,7 +381,7 @@ def cmd_rename(cfg, args):
     existing = {str(n) for n in speakers.speaker_stats(meeting)}
     if not existing:
         raise SystemExit("This meeting has no speakers (diarization was off).")
-    if not speakers.clip_path(args.folder, 1).exists():
+    if not speakers.has_samples(args.folder) and not meeting.get("voice_samples_deleted"):
         speakers.make_samples(meeting, args.folder)
 
     if args.names:
