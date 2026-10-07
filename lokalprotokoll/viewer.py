@@ -790,7 +790,7 @@ class SpeakerPanel(ctk.CTkFrame):
                          justify="left", wraplength=360).pack(fill="x")
             self.entries[speaker] = entry
             if speaker == 0:
-                continue  # the mic track is you: your name is my_name in config.toml
+                continue  # the mic track is you: set your name once under Profile (record.my_name)
             extra = ctk.CTkFrame(col, fg_color="transparent")
             extra.pack(fill="x", pady=(4, 0))
             match = recognized.get(str(speaker))
@@ -807,8 +807,10 @@ class SpeakerPanel(ctk.CTkFrame):
 
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(fill="x", padx=6, pady=(8, 0))
-        self.rewrite = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(bottom, text="Rewrite minutes with the names", variable=self.rewrite, font=app.f_small,
+        # Off: the names are only replaced in the text (instant, the minutes stay
+        # word for word). On: the AI writes the minutes again, which can change them.
+        self.rewrite = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(bottom, text="Also rewrite the minutes with AI", variable=self.rewrite, font=app.f_small,
                         text_color=INK, fg_color=INK, hover_color=INK_HOVER, border_color=MUTED, checkmark_color=BG,
                         checkbox_width=18, checkbox_height=18).pack(side="left")
         ctk.CTkButton(bottom, text="Save names", height=36, width=130, corner_radius=10, font=app.f_button,

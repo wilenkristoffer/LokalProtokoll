@@ -83,6 +83,9 @@ delete_raw_audio = true
 [summarize]
 ollama_url = "http://localhost:11434"
 model = "gemma4:12b"
+# Language of the minutes: "sv", "en", or "auto" = the language spoken in the meeting.
+# Set it under Profile in the app.
+language = "auto"
 # Ollama defaults to 4096 tokens on a 16 GB card, so always set this.
 # A 1 hour meeting is roughly 12-15k tokens.
 num_ctx = 32768

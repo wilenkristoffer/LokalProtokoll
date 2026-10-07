@@ -84,6 +84,53 @@ def replace_everywhere(folder, find, replacement, whole_words=True):
     return count
 
 
+def rename_speakers(meeting, folder, new_names, in_summary=True):
+    """Give speakers names ({"1": "Erik", "0": "Anna"}) in meeting.json,
+    transcript.md and speakers.html, and with in_summary also in summary.md by a
+    plain text replace: the rest of the minutes stays word for word. Returns the
+    (old, new) names that changed."""
+    names = meeting.setdefault("speaker_names", {})
+    before = {n: output.speaker_name(meeting, int(n)) for n in new_names}
+    for number, name in new_names.items():
+        name = output.plain_name(name, meeting) if number == "0" else name.strip()
+        if name:
+            names[number] = name
+        else:
+            names.pop(number, None)
+    renames = [(before[n], output.speaker_name(meeting, int(n))) for n in new_names]
+    renames = [(old, new) for old, new in renames if old != new]
+    if not renames:
+        return []
+    output.write_transcript_md(meeting, folder)
+    speakers.write_html(meeting, folder)
+    summary = Path(folder, "summary.md")
+    if in_summary and summary.exists():
+        # Your unnamed label "Jag" / "Me" is also an ordinary word: match its capitals.
+        me = output.labels(meeting["language"])["me"]
+        text = speakers.replace_names(summary.read_text(encoding="utf-8"), renames, exact_case=(me,))
+        summary.write_text(text, encoding="utf-8")
+    output.save_meeting(meeting, folder)
+    return renames
+
+
+def meetings_without_my_name(cfg, previous=""):
+    """Recordings where you (the mic track) are still "Jag" / "Me", or have the
+    name you used before (previous). Mic-only recordings have no mic speaker."""
+    from .config import resolve
+    base = Path(resolve(cfg["paths"]["meetings_dir"]))
+    found = []
+    for meeting_json in sorted(base.glob("*/meeting.json")):
+        try:
+            meeting = output.load_meeting(meeting_json.parent)
+        except (SystemExit, ValueError, KeyError):
+            continue
+        if not meeting.get("track_files") or not any(s.get("speaker") == 0 for s in meeting["segments"]):
+            continue
+        if meeting.get("speaker_names", {}).get("0", "") in ("", previous):
+            found.append(meeting_json.parent)
+    return found
+
+
 def rename_meeting(folder, name):
     """Give the meeting a new name (it then no longer gets an automatic title)."""
     meeting = output.load_meeting(folder)

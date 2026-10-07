@@ -111,9 +111,9 @@ def run_summary(cfg, meeting, out_dir, timer, model):
                 speakers.write_html(meeting, out_dir)
         review = summarize.review_notes(cfg, meeting, model, text)
         print(f"    {len(review)} point(s) to check before sharing")
-    lang = "sv" if meeting["language"] == "sv" else "en"
+    lang = summarize.minutes_language(cfg, meeting)
     output.write_summary_md(meeting, text, model, cfg["prompts"][f"consent_note_{lang}"], out_dir,
-                            review=review)
+                            review=review, lang=lang)
     summarize.unload(cfg, model)  # free the GPU memory and RAM right away
     meeting["summary_model"] = model
     meeting.pop("summary_stale", None)  # the minutes match the transcript again
@@ -400,27 +400,18 @@ def cmd_rename(cfg, args):
     else:
         new_names = ask_names(meeting, args.folder)
 
-    renames = []
-    for number, name in new_names.items():
-        old = output.speaker_name(meeting, int(number))
-        if old != name:
-            renames.append((old, name))
-            print(f"  {old} -> {name}")
+    from lokalprotokoll import edit
+
+    # Without --summarize the names are replaced in the minutes as plain text.
+    renames = edit.rename_speakers(meeting, args.folder, new_names, in_summary=not args.summarize)
     if not renames:
         print("No changes.")
         return
-    meeting.setdefault("speaker_names", {}).update(new_names)
-
-    output.write_transcript_md(meeting, args.folder)
-    speakers.write_html(meeting, args.folder)
+    for old, new in renames:
+        print(f"  {old} -> {new}")
     if args.summarize:
         run_summary(cfg, meeting, args.folder, Timer(), args.llm)
-    else:
-        summary = Path(args.folder, "summary.md")
-        if summary.exists():
-            text = summary.read_text(encoding="utf-8")
-            summary.write_text(speakers.replace_names(text, renames), encoding="utf-8")
-    output.save_meeting(meeting, args.folder)
+        output.save_meeting(meeting, args.folder)
     print("Updated transcript.md, summary.md and speakers.html")
 
 
@@ -437,7 +428,7 @@ def cmd_compare(cfg, args):
     meeting = output.load_meeting(args.folder)
     models = args.models or cfg["summarize"]["compare_models"]
     installed = summarize.installed_models(cfg)
-    lang = "sv" if meeting["language"] == "sv" else "en"
+    lang = summarize.minutes_language(cfg, meeting)
     results = []
     for model in models:
         if model not in installed and model + ":latest" not in installed:
@@ -448,7 +439,7 @@ def cmd_compare(cfg, args):
         print(f"    {stats['seconds']} s, {stats['tokens_per_s']} tok/s, GPU {stats['gpu_percent']}%, VRAM {stats['vram_mb']} MB")
         filename = f"summary_{slugify(model)}.md"
         output.write_summary_md(meeting, text, model, cfg["prompts"][f"consent_note_{lang}"],
-                                args.folder, filename)
+                                args.folder, filename, lang=lang)
         results.append((model, text, stats))
         summarize.unload(cfg, model)
 

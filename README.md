@@ -119,6 +119,12 @@ You can also double-click `LokalProtokoll.pyw`. To get a desktop and Start menu 
 
 Top right:
 
+- **Profile** (the person icon): your name, shown as "Anna (Me)" for the microphone track, and the language
+  of the minutes: **Same as the meeting** (the default: Swedish meetings get Swedish minutes), **Svenska** or
+  **English**. With a fixed language, a Swedish meeting can get English minutes and the other way around; the
+  transcript stays in the language that was spoken. Saved as `my_name` and `summarize.language` in
+  `config.toml`, and used from the next meeting that is processed (or **Rewrite minutes** for an earlier one).
+
 - **Hidden** (on by default): the window is excluded from screen sharing and screenshots. You see it; Teams, Zoom
   and screenshots do not. Click it to switch to "Visible". This needs Windows 10 version 2004 or newer.
 - **Pin**: keeps the window on top of other windows.
@@ -144,8 +150,10 @@ The rest of the window:
   tabs:
   - **Minutes**: the summary.
   - **Transcript**: the full transcript, with each speaker in their own color.
-  - **Speakers**: play each speaker's voice sample and type a name. "Rewrite minutes with the names" makes a new
-    summary with the names.
+  - **Speakers**: play each speaker's voice sample and type a name. Save names replaces "Speaker 1" etc. with the
+    names in the transcript and the minutes: a plain text replace, instant, and the rest of the minutes stays word
+    for word. Tick "Also rewrite the minutes with AI" to have the minutes written again with the names instead
+    (slower, and the content can change).
 
   Copy puts the text on the clipboard. The panel closes with the X button or Esc.
 
@@ -220,7 +228,9 @@ python lp.py record --name "Styrelsemote" --speakers 3
 This records two separate tracks:
 
 - **mic**: your microphone. In an online meeting this is you, so it is not diarized. You are labeled "Jag" (or "Me"
-  in English); set `my_name` in `config.toml` to use your name.
+  in English). Set your name with the profile button at the top of the app (or `my_name` in `config.toml`) and you
+  are shown as "Anna (Jag)" / "Anna (Me)". When you set it, the app offers to use it in your earlier
+  recordings too: only that label is replaced in the transcript and the minutes, nothing is rewritten.
 - **system**: everything your PC plays (WASAPI loopback), i.e. the other participants. Only this track is split into
   "Talare 1, 2, ...". `--speakers` is the number of *other* people (not counting you).
 

@@ -45,7 +45,7 @@ ICONS = {"minutes": "\ue8a5", "transcript": "\ue8fd", "speakers": "\ue716", "rew
          "folder": "\ue838", "delete": "\ue74d", "play": "\ue768", "pin": "\ue718", "copy": "\ue8c8",
          "open": "\ue8a7", "more": "\ue712", "import": "\ue8b5", "hidden": "\ued1a", "visible": "\ue890",
          "tray": "\ue921", "log": "\ue9d9", "add": "\ue710", "edit": "\ue70f", "find": "\ue721",
-         "rename": "\ue8ac", "redo": "\ue895", "close": "\ue711"}
+         "rename": "\ue8ac", "redo": "\ue895", "close": "\ue711", "profile": "\ue77b"}
 
 STEPS = ["convert", "detect", "transcribe", "diarize", "summarize"]
 STEP_LABELS = {"convert": "Converting audio", "detect": "Detecting language",
@@ -568,6 +568,47 @@ class PromptPopup(PopupMenu):
         self._choose(lambda: on_save(values))
 
 
+MINUTES_LANGUAGES = {"auto": "Same as the meeting", "sv": "Svenska", "en": "English"}
+
+
+class ProfilePopup(PromptPopup):
+    """Your name and the language of the minutes.
+    items: (name, language "auto"/"sv"/"en", on_save(name, language))."""
+
+    def _fill(self, frame, items):
+        name, language, on_save = items
+        ctk.CTkLabel(frame, text="Profile", font=self.app.f_bold, text_color=INK).pack(anchor="w", padx=14, pady=(12, 6))
+        ctk.CTkLabel(frame, text="Your name (shown as \"Name (Me)\" in recordings)", font=self.app.f_small,
+                     text_color=MUTED).pack(anchor="w", padx=14)
+        entry = ctk.CTkEntry(frame, width=380, height=34, font=self.app.f_body, border_width=1,
+                             border_color=LINE, fg_color=BG, text_color=INK)
+        entry.insert(0, name)
+        entry.pack(fill="x", padx=12, pady=(0, 10))
+        ctk.CTkLabel(frame, text="Write the minutes in", font=self.app.f_small,
+                     text_color=MUTED).pack(anchor="w", padx=14)
+        choice = ctk.CTkSegmentedButton(frame, values=list(MINUTES_LANGUAGES.values()), font=self.app.f_small,
+                                        height=28, selected_color=INK, selected_hover_color=INK_HOVER,
+                                        unselected_color=BG, unselected_hover_color=LINE, fg_color=BG,
+                                        command=lambda v: restyle_segments(choice))
+        choice.set(MINUTES_LANGUAGES.get(language, MINUTES_LANGUAGES["auto"]))
+        restyle_segments(choice)
+        choice.pack(fill="x", padx=12, pady=(0, 12))
+
+        def save():
+            picked = next(k for k, v in MINUTES_LANGUAGES.items() if v == choice.get())
+            self._choose(lambda: on_save(entry.get().strip(), picked))
+        entry.bind("<Return>", lambda e: save())
+        entry.bind("<Escape>", lambda e: self.destroy())
+        buttons = ctk.CTkFrame(frame, fg_color="transparent")
+        buttons.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkButton(buttons, text="Save", width=100, height=32, corner_radius=8, font=self.app.f_small,
+                      fg_color=INK, hover_color=INK_HOVER, text_color=BG, command=save).pack(side="right")
+        ctk.CTkButton(buttons, text="Cancel", width=80, height=32, corner_radius=8, font=self.app.f_small,
+                      fg_color=BG, hover_color=LINE, text_color=INK, border_width=1, border_color=LINE,
+                      command=self.destroy).pack(side="right", padx=(0, 6))
+        self.after(60, lambda: (entry.focus_set(), entry.select_range(0, "end")))
+
+
 class Tooltip:
     """A small label shown under a widget while the mouse is over it."""
 
@@ -743,6 +784,7 @@ class App(ctk.CTk):
     def __init__(self, cfg, config_path=None, tray=True):
         super().__init__()
         self.cfg = cfg
+        self.config_path = config_path
         self.jobs = JobQueue(config_path)
         self.rec = RecordingWorker(cfg, self.jobs.add, self.jobs.add_failed)
         self.shown_state = None
@@ -834,6 +876,10 @@ class App(ctk.CTk):
         self.hide_btn = IconButton(bar, self, ICONS["hidden"], "Hidden", self.toggle_hidden, text_color=MUTED, pad=8)
         self.hide_btn.pack(side="right", padx=2)
         Tooltip(self, self.hide_btn, "Hidden from screen sharing and screenshots")
+        self.profile_btn = IconButton(bar, self, ICONS["profile"], "", None, text_color=MUTED, pad=7)
+        self.profile_btn.command = lambda: self.edit_profile(self.profile_btn)
+        self.profile_btn.pack(side="right", padx=2)
+        Tooltip(self, self.profile_btn, "Profile: your name and the language of the minutes")
 
     def _build_idle(self):
         f = self.idle = ctk.CTkFrame(self.card, fg_color="transparent")
@@ -1176,6 +1222,45 @@ class App(ctk.CTk):
                 edit.rename_meeting(item["folder"], values[0])
                 self._after_edit(item["folder"])
         PromptPopup(self, ("Rename meeting", [("", item["name"])], save, "Rename"), *self._popup_at(widget))
+
+    def edit_profile(self, widget):
+        """Your name, used for you (the microphone) in recordings instead of "Me" /
+        "Jag": shown as "Anna (Me)". And the language of the minutes. Saved as
+        record.my_name and summarize.language in config.toml; processing reads
+        config.toml for every job, so the next one uses them."""
+        from . import edit
+        from .config import save_string
+
+        def save(name, language):
+            previous = self.cfg["record"].get("my_name", "")
+            try:
+                if language != self.cfg["summarize"].get("language", "auto"):
+                    save_string("summarize", "language", language, self.config_path)
+                    self.cfg["summarize"]["language"] = language
+                if name != previous:
+                    save_string("record", "my_name", name, self.config_path)
+                    self.cfg["record"]["my_name"] = name
+            except (KeyError, OSError) as e:
+                messagebox.showerror("Profile", f"Could not save the profile in config.toml:\n{e}", parent=self)
+                return
+            if name == previous:
+                return
+            past = [f for f in edit.meetings_without_my_name(self.cfg, previous) if not self.jobs.has(f)]
+            if not past:
+                return
+            label = f"\"{name} (Me)\"" if name else "\"Me\""
+            if not messagebox.askyesno(
+                    "Profile", f"New recordings will show you as {label}.\n\nAlso use it in your {len(past)} earlier "
+                    f"recording{'s' if len(past) != 1 else ''}? Only your name changes in the transcript and the "
+                    "minutes; the minutes are not rewritten.", parent=self):
+                return
+            for folder in past:
+                edit.rename_speakers(output.load_meeting(folder), folder, {"0": name})
+            self.refresh_list()
+            if self.viewer_open and self.viewer.folder in past:
+                self.viewer.reload(keep_scroll=True)
+        ProfilePopup(self, (self.cfg["record"].get("my_name", ""), self.cfg["summarize"].get("language", "auto"), save),
+                     *self._popup_at(widget))
 
     def redo_speakers(self, item, widget):
         folder = item["folder"]

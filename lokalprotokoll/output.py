@@ -56,14 +56,22 @@ def fmt_time(seconds):
 
 def speaker_name(meeting, speaker):
     """The name given with "lp.py rename", otherwise "Talare 1" / "Speaker 1".
-    Speaker 0 is the mic track of a recording (you), shown as "Jag" / "Me"."""
+    Speaker 0 is the mic track of a recording (you), shown as "Jag" / "Me", or with
+    your name as "Anna (Jag)" / "Anna (Me)"."""
     if speaker is None:
         return None
     given = meeting.get("speaker_names", {}).get(str(speaker))
-    if given:
-        return given
     lab = labels(meeting["language"])
-    return lab["me"] if speaker == 0 else f"{lab['speaker']} {speaker}"
+    if speaker == 0:
+        return f"{given} ({lab['me']})" if given else lab["me"]
+    return given or f"{lab['speaker']} {speaker}"
+
+
+def plain_name(name, meeting):
+    """A name typed for speaker 0 without the " (Me)" that speaker_name() adds."""
+    suffix = f" ({labels(meeting['language'])['me']})"
+    name = name.strip()
+    return name[: -len(suffix)].strip() if name.endswith(suffix) else name
 
 
 def transcript_lines(meeting):
@@ -95,8 +103,8 @@ def _when(meeting):
     return f"{meeting['date']}-{start + timedelta(seconds=meeting['duration_s']):%H:%M}"
 
 
-def _header(meeting, title):
-    lab = labels(meeting["language"])
+def _header(meeting, title, lang=None):
+    lab = labels(lang or meeting["language"])
     text = (f"# {title}: {meeting['name']}\n\n"
             f"- {lab['date']}: {_when(meeting)}\n"
             f"- {lab['duration']}: {fmt_time(meeting['duration_s'])}\n")
@@ -117,10 +125,11 @@ def write_transcript_md(meeting, out_dir):
     Path(out_dir, "transcript.md").write_text(text, encoding="utf-8")
 
 
-def write_summary_md(meeting, summary, model, consent_note, out_dir, filename="summary.md", review=()):
-    """review: Markdown list lines from summarize.review_notes(), shown after the minutes."""
-    lab = labels(meeting["language"])
-    text = _header(meeting, lab["summary"])
+def write_summary_md(meeting, summary, model, consent_note, out_dir, filename="summary.md", review=(), lang=None):
+    """review: Markdown list lines from summarize.review_notes(), shown after the minutes.
+    lang: the language of the minutes, if not the meeting's (summarize.language)."""
+    lab = labels(lang or meeting["language"])
+    text = _header(meeting, lab["summary"], lang)
     text += f"- {lab['model']}: {model}\n\n"
     text += summary.strip() + "\n\n---\n\n"
     if review:

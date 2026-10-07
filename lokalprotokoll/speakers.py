@@ -120,11 +120,18 @@ def write_html(meeting, out_dir, stats=None):
     Path(out_dir, "speakers.html").write_text(page, encoding="utf-8")
 
 
-def replace_names(text, renames):
+def replace_names(text, renames, exact_case=()):
     """Replace old speaker names with new ones in text (e.g. summary.md).
-    Placeholders make swaps like "Talare 1" <-> "Talare 2" safe."""
+    Placeholders make swaps like "Talare 1" <-> "Talare 2" safe. Names in
+    exact_case only match with the same capitals: "Jag" / "Me" as your name,
+    not the ordinary words "jag" / "me". They are also left alone in brackets,
+    where the minutes already name you: "Anna (Jag)"."""
     for i, (old, _) in enumerate(renames):
-        text = re.sub(r"\b" + re.escape(old) + r"\b", f"\x00{i}\x00", text, flags=re.IGNORECASE)
+        if old in exact_case:
+            pattern, flags = r"(?<![\w(])" + re.escape(old) + r"(?![\w)])", 0
+        else:
+            pattern, flags = r"(?<!\w)" + re.escape(old) + r"(?!\w)", re.IGNORECASE
+        text = re.sub(pattern, f"\x00{i}\x00", text, flags=flags)
     for i, (_, new) in enumerate(renames):
         text = text.replace(f"\x00{i}\x00", new)
     return text

@@ -135,10 +135,19 @@ def _split(lines, max_chars):
     return ["\n".join(c) for c in chunks]
 
 
+def minutes_language(cfg, meeting):
+    """"sv" or "en": summarize.language in config.toml, or with "auto" the language
+    spoken in the meeting."""
+    lang = cfg["summarize"].get("language", "auto")
+    if lang not in ("sv", "en"):
+        lang = meeting["language"]
+    return "sv" if lang == "sv" else "en"
+
+
 def make_title(cfg, meeting, summary, model):
     """A short title for a meeting that was not given a name, made from its minutes.
     Returns None if the model gives nothing usable."""
-    lang = "sv" if meeting["language"] == "sv" else "en"
+    lang = minutes_language(cfg, meeting)
     prompt = read_text(cfg["prompts"][f"title_{lang}"]).replace("{summary}", summary)
     text, _ = chat(cfg, model, prompt)
     lines = [line for line in text.strip().splitlines() if line.strip()]
@@ -152,7 +161,7 @@ def make_title(cfg, meeting, summary, model):
 def summarize(cfg, meeting, model):
     """Return (summary_markdown, stats)."""
     s = cfg["summarize"]
-    lang = "sv" if meeting["language"] == "sv" else "en"
+    lang = minutes_language(cfg, meeting)
     summary_prompt = read_text(cfg["prompts"][f"summary_{lang}"])
     lines = transcript_lines(meeting)
     transcript = "\n".join(lines)
@@ -207,8 +216,12 @@ def verify(cfg, meeting, model, draft, source):
     where a 12B model drops in new typos (measured: it fixed one and added two). A
     correction is applied only where its wrong text occurs verbatim in the draft."""
     s = cfg["summarize"]
-    lang = "sv" if meeting["language"] == "sv" else "en"
+    lang = minutes_language(cfg, meeting)
     prompt = _fill(read_text(_prompt_path(cfg, f"verify_{lang}")), meeting, source).replace("{summary}", draft)
+    if lang != ("sv" if meeting["language"] == "sv" else "en"):
+        # Minutes in another language than the meeting: every word is translated, so
+        # "words that were not used in the meeting" must not be read literally.
+        prompt += TRANSLATED_NOTE[lang]
     if len(prompt) > (s["num_ctx"] - 1000) * s["chars_per_token"]:
         print("    verify skipped: transcript and draft do not fit in num_ctx")
         return draft
@@ -228,6 +241,15 @@ def verify(cfg, meeting, model, draft, source):
     text = re.sub(r"(?m)^\s*[-*]\s*\.?\s*$\n?", "", text)  # bullets emptied by a removal
     print(f"    verify: {applied} correction(s)")
     return text
+
+
+TRANSLATED_NOTE = {
+    "sv": ("\n\nObs: m\xf6tet h\xf6lls p\xe5 engelska och utkastet \xe4r skrivet p\xe5 svenska. Att orden "
+           "\xe4r \xf6versatta \xe4r inget fel. R\xe4tta bara det som betyder n\xe5got annat \xe4n i "
+           "transkriberingen."),
+    "en": ("\n\nNote: the meeting was held in Swedish and the draft is written in English. Translated words "
+           "are not errors. Only correct what means something other than in the transcript."),
+}
 
 
 # Number words, so that "tre veckor" in the transcript matches "3 veckor" in the minutes.
@@ -258,9 +280,16 @@ def _number_said(number, transcript, lang):
     return bool(words) and re.search(rf"\b({words})\b", transcript, re.IGNORECASE) is not None
 
 
-def unsupported(meeting, summary):
+# English minutes of a Swedish meeting capitalize these; the transcript has "tisdag".
+CALENDAR_EN = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january",
+               "february", "march", "april", "may", "june", "july", "august", "september", "october",
+               "november", "december"}
+
+
+def unsupported(meeting, summary, translated=False):
     """Numbers and names in the minutes that do not occur in the transcript. A plain
-    text check, so it also catches what the verify pass missed. Returns (numbers, names)."""
+    text check, so it also catches what the verify pass missed. Returns (numbers, names).
+    translated: the minutes are in another language than the meeting."""
     lang = "sv" if meeting["language"] == "sv" else "en"
     # Without the timestamps, which contain almost every number below 60.
     transcript = "\n".join(re.sub(r"^\[[\d:]+\] ", "", line) for line in transcript_lines(meeting))
@@ -278,6 +307,8 @@ def unsupported(meeting, summary):
         for m in re.finditer(r"(?<=[^.:!?\s(\"]\s)([A-Z\xc5\xc4\xd6][\w-]+)", body):
             word = m.group(1)
             base = word.lower()[:-1] if word.lower().endswith("s") else word.lower()  # "Eriks"
+            if translated and word.lower() in CALENDAR_EN:
+                continue
             if base not in lower and base not in known and word not in names:
                 names.append(word)
     return numbers, names
@@ -287,7 +318,7 @@ def sensitive(cfg, meeting, model, summary):
     """Details that may be sensitive to share (health, security, personal, internal
     numbers), each with a suggested rewording. A finding whose quote is not in the
     minutes is dropped, since the model sometimes makes them up."""
-    lang = "sv" if meeting["language"] == "sv" else "en"
+    lang = minutes_language(cfg, meeting)
     prompt = read_text(_prompt_path(cfg, f"sensitive_{lang}")).replace("{summary}", summary)
     text, _ = chat(cfg, model, prompt, temperature=0, max_tokens=800)
     plain = re.sub(r"\s+", " ", summary.replace("**", "")).lower()
@@ -301,8 +332,9 @@ def sensitive(cfg, meeting, model, summary):
 
 def review_notes(cfg, meeting, model, summary):
     """Lines for the "check before sharing" section of summary.md. Empty if nothing was found."""
-    sv = meeting["language"] == "sv"
-    numbers, names = unsupported(meeting, summary)
+    lang = minutes_language(cfg, meeting)
+    sv = lang == "sv"
+    numbers, names = unsupported(meeting, summary, translated=lang != ("sv" if meeting["language"] == "sv" else "en"))
     lines = []
     if numbers:
         lines.append(("- Siffror som inte finns i transkriberingen: " if sv else

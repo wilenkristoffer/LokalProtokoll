@@ -34,3 +34,24 @@ def read_text(path_str):
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:
         return data.decode("cp1252")
+
+
+def save_string(section, key, value, path=None):
+    """Set key = "value" in [section] of config.toml, editing only that line so
+    the comments in the file stay. The key must already be in the file."""
+    import json
+    import re
+
+    path = Path(path) if path else DEFAULT_CONFIG
+    lines = path.read_text(encoding="utf-8").split("\n")
+    current = None
+    for i, line in enumerate(lines):
+        header = re.match(r"\s*\[([^\]]+)\]\s*$", line)
+        if header:
+            current = header.group(1).strip()
+        elif current == section and re.match(rf"\s*{re.escape(key)}\s*=", line):
+            # A JSON string is a valid TOML basic string.
+            lines[i] = f"{key} = {json.dumps(value, ensure_ascii=False)}"
+            path.write_text("\n".join(lines), encoding="utf-8")
+            return
+    raise KeyError(f"{section}.{key} is not in {path}")
