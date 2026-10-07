@@ -143,6 +143,9 @@ The rest of the window:
 
   Copy puts the text on the clipboard. The panel closes with the X button or Esc.
 
+  The play button in the top right corner opens a player at the bottom of the panel: play/pause, back 10 seconds,
+  forward 30 seconds, and a time line you can drag to jump to any point.
+
   The `...` button in the top right corner of the panel deletes what you no longer need once the minutes are
   done: **Delete recording** (the audio files, about 350 MB per hour of recording), **Delete speaker voices** (the voice sample
   of each speaker), or both. The transcript and the minutes stay. If people in the meeting also have a saved voice,

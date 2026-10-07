@@ -20,9 +20,13 @@ from .theme import (BG, BOX, BOX_CHECKED, BULLET, CARD, CHECK, CLOSE, INK, INK_H
                     SQUARE, fmt_duration, pick, restyle_segments, speaker_color)
 
 STALE = ("#F3E5C4", "#3A3222")  # soft amber: "these minutes are out of date"
+FIND_NOW = ("#F2B84B", "#7A5A16")  # the find hit you are on; the other hits are STALE
 INLINE = re.compile(r"\*\*[^*\n]+\*\*|`[^`\n]+`|(?<![\w*])[*_][^*_\n]+[*_](?![\w*])")
 TABS = {"Minutes": "minutes", "Transcript": "transcript", "Speakers": "speakers"}
-GLYPH_PLAY, GLYPH_PAUSE, GLYPH_STOP = "\ue768", "\ue769", "\ue71a"  # Segoe Fluent Icons
+# Segoe Fluent Icons: play, pause, back 10 s and forward 30 s (the numbers are part of the glyphs).
+GLYPH_PLAY, GLYPH_PAUSE, GLYPH_BACK, GLYPH_FORWARD = "\ue768", "\ue769", "\ued3c", "\ued3d"
+GLYPH_UP, GLYPH_DOWN = "\ue70e", "\ue70d"
+BACK_S, FORWARD_S = 10, 30
 
 
 def play_sound(path=None):
@@ -48,23 +52,26 @@ class Viewer(ctk.CTkFrame):
         self.player = Player()
         self.player_timer = None
 
+        from .app import Tooltip
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.pack(fill="x", padx=(22, 12), pady=(14, 0))
+        # The buttons are packed before the title, so a long title cannot push them out of the panel.
+        actions = ctk.CTkFrame(head, fg_color="transparent")
+        actions.pack(side="right")
         self.title_label = ctk.CTkLabel(head, text="", font=app.f_view_title, text_color=INK, anchor="w")
         self.title_label.pack(side="left", fill="x", expand=True)
-        self.close_btn = ctk.CTkButton(head, text=CLOSE, width=30, height=30, corner_radius=8, font=app.f_body,
+        # Listen to the meeting: opens the player at the bottom of the panel.
+        self.play_btn = app.icon_button(actions, "play", "", self.open_player)
+        Tooltip(app, self.play_btn, "Listen to the meeting")
+        # Delete the recording and/or the voice samples when you are done with them.
+        self.more_btn = app.icon_button(actions, "more", "", lambda: app.delete_audio_menu(self.folder, self.more_btn))
+        Tooltip(app, self.more_btn, "Delete recording or speaker voices")
+        self.close_btn = ctk.CTkButton(actions, text=CLOSE, width=30, height=30, corner_radius=8, font=app.f_body,
                                        fg_color="transparent", hover_color=LINE, text_color=MUTED,
                                        command=app.close_viewer)
-        self.close_btn.pack(side="right")
-        # Delete the recording and/or the voice samples when you are done with them.
-        from .app import Tooltip
-        self.more_btn = app.icon_button(head, "more", "", lambda: app.delete_audio_menu(self.folder, self.more_btn))
-        Tooltip(app, self.more_btn, "Delete recording or speaker voices")
-        # Listen to the meeting: play/pause, then stop and the time once started.
-        self.play_btn = app.icon_button(head, "play", "", self.toggle_meeting_audio)
-        self.stop_btn = app.icon_button(head, "play", "", self.stop_meeting_audio)
-        self.stop_btn.set_style(glyph=GLYPH_STOP)
-        self.time_label = ctk.CTkLabel(head, text="", font=app.f_small, text_color=MUTED)
+        self.play_btn.pack(side="left", padx=(0, 2))
+        self.more_btn.pack(side="left", padx=(0, 2))
+        self.close_btn.pack(side="left")
         self.meta_label = ctk.CTkLabel(self, text="", font=app.f_small, text_color=MUTED, anchor="w")
         self.meta_label.pack(fill="x", padx=22)
 
@@ -84,7 +91,10 @@ class Viewer(ctk.CTkFrame):
         self.cancel_btn = ctk.CTkButton(self.bar, text="Cancel", width=80, height=28, corner_radius=8,
                                         font=app.f_small, fg_color=BG, hover_color=LINE, text_color=INK,
                                         border_width=1, border_color=LINE, command=lambda: self.show("minutes"))
+        self.find_btn = app.icon_button(self.bar, "find", "", self.open_find)
+        Tooltip(app, self.find_btn, "Find in this tab (Ctrl+F)")
         self.editing = False
+        self._build_find_bar()
 
         # Shown above the minutes when speakers or text changed after they were written.
         self.banner = ctk.CTkFrame(self, fg_color=STALE, corner_radius=10)
@@ -102,6 +112,159 @@ class Viewer(ctk.CTkFrame):
                                        button_hover_color=MUTED)
         self.text.configure(yscrollcommand=self.scroll.set)
         self._make_fonts()
+        self._build_player_bar()
+
+    def _build_player_bar(self):
+        """The player at the bottom of the panel: back 10 s, play/pause, forward 30 s,
+        the time line (drag it to jump) and close. Shown while listening."""
+        from .app import IconButton, Tooltip
+        app = self.app
+        bar = self.player_bar = ctk.CTkFrame(self, fg_color=BG, corner_radius=12)
+        self.dragging = False
+
+        def button(glyph, tip, command, **style):
+            b = IconButton(bar, app, glyph, "", command, text_color=INK, pad=8, height=32, **style)
+            b.pack(side="left", padx=(0, 2), pady=6)
+            Tooltip(app, b, tip)
+            return b
+        ctk.CTkFrame(bar, width=4, height=1, fg_color="transparent").pack(side="left")
+        self.back_btn = button(GLYPH_BACK, f"Back {BACK_S} seconds", lambda: self.skip(-BACK_S))
+        self.pause_btn = button(GLYPH_PLAY, "Play / pause", self.toggle_meeting_audio, fg_color=INK,
+                                hover=INK_HOVER, icon_color=BG)
+        self.forward_btn = button(GLYPH_FORWARD, f"Forward {FORWARD_S} seconds", lambda: self.skip(FORWARD_S))
+        self.pos_label = ctk.CTkLabel(bar, text="0:00", font=app.f_small, text_color=MUTED, width=44, anchor="e")
+        self.pos_label.pack(side="left", padx=(6, 8))
+        close = ctk.CTkButton(bar, text=CLOSE, width=28, height=28, corner_radius=8, font=app.f_small,
+                              fg_color="transparent", hover_color=LINE, text_color=MUTED,
+                              command=self.stop_meeting_audio)
+        close.pack(side="right", padx=(2, 8))
+        Tooltip(app, close, "Stop and close the player")
+        self.length_label = ctk.CTkLabel(bar, text="0:00", font=app.f_small, text_color=MUTED, width=44, anchor="w")
+        self.length_label.pack(side="right", padx=(8, 2))
+        self.slider = ctk.CTkSlider(bar, from_=0, to=1, height=16, progress_color=INK, button_color=INK,
+                                    button_hover_color=INK_HOVER, fg_color=LINE, command=self._slider_moved)
+        self.slider.pack(side="left", fill="x", expand=True)
+        self.slider.bind("<ButtonRelease-1>", self._slider_released)
+
+    def _build_find_bar(self):
+        """Find in the minutes or transcript you are looking at: every hit is marked,
+        Enter / Shift+Enter (or the arrows) move between them. Stays open across tabs."""
+        from .app import ICONS, IconButton, Tooltip
+        app = self.app
+        bar = self.find_bar = ctk.CTkFrame(self, fg_color=BG, corner_radius=10)
+        self.find_open = False
+        self.find_hits, self.find_index, self.find_query = [], -1, ""
+        ctk.CTkLabel(bar, text=ICONS["find"], font=app.f_icon, text_color=MUTED, width=16).pack(side="left",
+                                                                                              padx=(10, 4))
+        close = ctk.CTkButton(bar, text=CLOSE, width=28, height=28, corner_radius=8, font=app.f_small,
+                              fg_color="transparent", hover_color=LINE, text_color=MUTED, command=self.close_find)
+        close.pack(side="right", padx=(0, 4), pady=3)
+        Tooltip(app, close, "Close (Esc)")
+        for glyph, tip, step in ((GLYPH_DOWN, "Next (Enter)", 1), (GLYPH_UP, "Previous (Shift+Enter)", -1)):
+            b = IconButton(bar, app, glyph, "", lambda step=step: self.find_step(step), text_color=INK, pad=7,
+                           height=28)
+            b.pack(side="right", padx=(0, 2), pady=3)
+            Tooltip(app, b, tip)
+        self.find_count = ctk.CTkLabel(bar, text="", font=app.f_small, text_color=MUTED, anchor="e")
+        self.find_count.pack(side="right", padx=(6, 8))
+        self.find_entry = ctk.CTkEntry(bar, placeholder_text="Find", font=app.f_body, height=30, border_width=0,
+                                       fg_color=BG, text_color=INK)
+        self.find_entry.pack(side="left", fill="x", expand=True, pady=2)
+        self.find_entry.bind("<KeyRelease>", lambda e: self._find_typed())
+        self.find_entry.bind("<Return>", lambda e: self.find_step(1))
+        self.find_entry.bind("<Shift-Return>", lambda e: (self.find_step(-1), "break")[1])
+        self.find_entry.bind("<Down>", lambda e: self.find_step(1))
+        self.find_entry.bind("<Up>", lambda e: self.find_step(-1))
+        self.find_entry.bind("<Escape>", lambda e: (self.close_find(), "break")[1])  # not: close the panel
+
+    # ----- find in this tab -----
+    def open_find(self):
+        if self.view not in ("minutes", "transcript") or self.editing:
+            return
+        self.find_open = True
+        self.find_entry.configure(placeholder_text=f"Find in the {self.view}")
+        self.find_bar.pack(fill="x", padx=20, pady=(0, 8), before=self.body)
+        self.find_entry.focus_set()
+        self.find_entry.select_range(0, "end")
+        if self.find_entry.get():
+            self._find(jump=False)
+
+    def close_find(self):
+        self.find_open = False
+        self.find_bar.pack_forget()
+        self.text.tag_remove("find", "1.0", "end")
+        self.text.tag_remove("find_now", "1.0", "end")
+        self.find_hits, self.find_index = [], -1
+
+    def _find_typed(self):
+        if self.find_entry.get() != self.find_query:
+            self._find(jump=True)
+
+    def _find(self, jump):
+        """Mark every hit of the find text (case does not matter). jump moves to the first
+        hit from where you are; without it (the text was redrawn) only the marks change."""
+        t = self.text
+        q = self.find_query = self.find_entry.get()
+        anchor = self.find_hits[self.find_index][0] if self.find_index >= 0 else t.index("@0,0")
+        t.tag_remove("find", "1.0", "end")
+        t.tag_remove("find_now", "1.0", "end")
+        self.find_hits, self.find_index = [], -1
+        if q.strip():
+            length, pos = tk.IntVar(), "1.0"
+            while True:
+                pos = t.search(q, pos, "end", nocase=True, count=length)
+                if not pos or not length.get():
+                    break
+                end = f"{pos}+{length.get()}c"
+                t.tag_add("find", pos, end)
+                self.find_hits.append((pos, end))
+                pos = end
+            t.tag_raise("find")
+        if jump and self.find_hits:
+            self._find_goto(next((i for i, (a, _) in enumerate(self.find_hits) if t.compare(a, ">=", anchor)), 0))
+        else:
+            self._find_label()
+
+    def find_step(self, step):
+        """Next (step 1) or previous (-1) hit, round the end. The first step goes from
+        the part of the text that is on screen."""
+        hits, t = self.find_hits, self.text
+        if self.find_entry.get() != self.find_query:
+            self._find(jump=True)
+            return
+        if not hits:
+            return
+        if self.find_index >= 0:
+            self._find_goto((self.find_index + step) % len(hits))
+        elif step > 0:
+            top = t.index("@0,0")
+            self._find_goto(next((i for i, (a, _) in enumerate(hits) if t.compare(a, ">=", top)), 0))
+        else:
+            bottom = t.index(f"@0,{t.winfo_height()}")
+            last = len(hits) - 1
+            self._find_goto(next((i for i in range(last, -1, -1) if t.compare(hits[i][0], "<=", bottom)), last))
+
+    def _find_goto(self, i):
+        t = self.text
+        self.find_index = i
+        t.tag_remove("find_now", "1.0", "end")
+        a, b = self.find_hits[i]
+        t.tag_add("find_now", a, b)
+        t.tag_raise("find_now")
+        t.see(a)
+        self._find_label()
+
+    def _find_label(self):
+        n = len(self.find_hits)
+        if not self.find_query.strip():
+            text = ""
+        elif not n:
+            text = "No results"
+        elif self.find_index >= 0:
+            text = f"{self.find_index + 1} of {n}"
+        else:
+            text = f"{n} result{'s' if n != 1 else ''}"
+        self.find_count.configure(text=text)
 
     def _make_fonts(self):
         body = "Segoe UI Variable Text"
@@ -145,6 +308,8 @@ class Viewer(ctk.CTkFrame):
         t.tag_configure("hint", font=f["italic"], foreground=pick(MUTED), spacing3=4)
         t.tag_configure("match", font=f["bold"], background=pick(STALE))
         t.tag_configure("focus", background=pick(STALE))
+        t.tag_configure("find", background=pick(STALE))
+        t.tag_configure("find_now", background=pick(FIND_NOW))
         for n in range(12):
             t.tag_configure(f"spk{n}", foreground=pick(speaker_color(n)))
 
@@ -165,13 +330,18 @@ class Viewer(ctk.CTkFrame):
         self.meta_label.configure(text=f"{when}  {MIDDOT}  {fmt_duration(m['duration_s'])}  {MIDDOT}  "
                                        f"{count} speaker{'s' if count != 1 else ''}  {MIDDOT}  {m['language']}")
         self.bar.pack(fill="x", padx=20, pady=(10, 8), after=self.meta_label)
-        self.more_btn.pack(side="right", padx=(0, 2), after=self.close_btn)
-        if self._audio_path().exists():
-            if not self.play_btn.winfo_manager():  # re-packing would move it past the stop button
-                self.play_btn.pack(side="right", padx=(0, 4))
+        self.more_btn.pack(side="left", padx=(0, 2), before=self.close_btn)
+        if not self._audio_path().exists():
+            self.stop_meeting_audio()  # deleted while listening
+        self._header_play_button()
+        self.show(view)
+
+    def _header_play_button(self):
+        """The header's play button opens the player; hidden while the player is open."""
+        if self.folder is not None and self._audio_path().exists() and not self.player.loaded:
+            self.play_btn.pack(side="left", padx=(0, 2), before=self.more_btn)
         else:
             self.play_btn.pack_forget()
-        self.show(view)
 
     def stop_audio(self):
         """Stop the meeting audio and a playing voice sample (and reset its button)."""
@@ -188,49 +358,79 @@ class Viewer(ctk.CTkFrame):
     def _audio_path(self):
         return self.folder / "audio_16k.wav"  # the mixed track (mic + system for a recording)
 
+    def open_player(self):
+        """Show the player at the bottom of the panel and start playing."""
+        try:
+            self.player.load(self._audio_path())
+        except Exception as e:  # unreadable file
+            self.player.close()
+            messagebox.showerror("Play", f"Could not open the audio:\n{e}", parent=self.app)
+            return
+        total = self.player.seconds()[1]
+        self.slider.configure(to=max(total, 1))
+        self.slider.set(0)
+        self.length_label.configure(text=output.fmt_time(total))
+        self.player_bar.pack(side="bottom", fill="x", padx=16, pady=(0, 14), before=self.body)
+        self._header_play_button()
+        self.toggle_meeting_audio()
+        self._tick_player()
+
     def toggle_meeting_audio(self):
         p = self.player
         if p.playing:
             p.pause()
-        elif p.active:
-            self.stop_voice_sample()
-            p.resume()
         else:
             self.stop_voice_sample()
             try:
-                p.play(self._audio_path())
-            except Exception as e:  # no output device, unreadable file
-                p.stop()
+                p.play()
+            except Exception as e:  # no output device
                 messagebox.showerror("Play", f"Could not play the audio:\n{e}", parent=self.app)
-                return
-            self.stop_btn.pack(side="right", padx=(0, 2), before=self.play_btn)
-            self.time_label.pack(side="right", padx=(0, 6), after=self.play_btn)
-            self._tick_player()
         self._player_style()
+
+    def skip(self, seconds):
+        self.player.seek(self.player.seconds()[0] + seconds)
+        self._show_position()
+
+    def _slider_moved(self, value):
+        # While dragging, only the time follows; the jump happens on release.
+        self.dragging = True
+        self.pos_label.configure(text=output.fmt_time(value))
+
+    def _slider_released(self, event=None):
+        if self.dragging:
+            self.dragging = False
+            self.player.seek(self.slider.get())
+            self._show_position()
 
     def pause_meeting_audio(self):
         self.player.pause()
         self._player_style()
 
     def stop_meeting_audio(self):
-        self.player.stop()
+        """Stop listening and close the player."""
+        self.player.close()
         if self.player_timer is not None:
             self.after_cancel(self.player_timer)
             self.player_timer = None
-        self.stop_btn.pack_forget()
-        self.time_label.pack_forget()
-        self._player_style()
+        self.dragging = False
+        self.player_bar.pack_forget()
+        self._header_play_button()
 
     def _player_style(self):
-        self.play_btn.set_style(glyph=GLYPH_PAUSE if self.player.playing else GLYPH_PLAY)
+        self.pause_btn.set_style(glyph=GLYPH_PAUSE if self.player.playing else GLYPH_PLAY)
+
+    def _show_position(self):
+        if not self.dragging:
+            pos = self.player.seconds()[0]
+            self.pos_label.configure(text=output.fmt_time(pos))
+            self.slider.set(pos)
 
     def _tick_player(self):
-        if self.player.finished:
-            self.stop_meeting_audio()
-            return
-        pos, total = self.player.seconds()
-        self.time_label.configure(text=f"{output.fmt_time(pos)} / {output.fmt_time(total)}")
-        self.player_timer = self.after(250, self._tick_player)
+        if self.player.finished and not self.player.playing:
+            self.player.pause()  # played to the end: Play starts from the beginning again
+        self._player_style()
+        self._show_position()
+        self.player_timer = self.after(200, self._tick_player)
 
     def reload(self, keep_scroll=False):
         """Show the meeting again after a change. keep_scroll keeps the reading position
@@ -241,7 +441,7 @@ class Viewer(ctk.CTkFrame):
             self.text.yview_moveto(position)
 
     def _bar_buttons(self, *buttons):
-        for b in (self.open_btn, self.copy_btn, self.edit_btn, self.save_btn, self.cancel_btn):
+        for b in (self.find_btn, self.open_btn, self.copy_btn, self.edit_btn, self.save_btn, self.cancel_btn):
             b.pack_forget()
         for b in buttons:
             b.pack(side="right", padx=(6, 0))
@@ -266,21 +466,25 @@ class Viewer(ctk.CTkFrame):
             self.speaker_panel = SpeakerPanel(self.body, self.app, self.folder, self.meeting)
             self.speaker_panel.pack(fill="both", expand=True, padx=(12, 0))
             self._bar_buttons()
+            self.find_bar.pack_forget()  # comes back on the minutes or transcript
             return
         self._show_text()
         if view == "minutes":
-            self._bar_buttons(self.open_btn, self.copy_btn, self.edit_btn)
+            self._bar_buttons(self.open_btn, self.copy_btn, self.edit_btn, self.find_btn)
             path = self.folder / "summary.md"
             if path.exists():
                 render_markdown(self.text, path.read_text(encoding="utf-8"))
             else:
                 self._message("No minutes yet. Use \"Rewrite minutes\" in the meeting menu.")
         else:
-            self._bar_buttons(self.open_btn, self.copy_btn)
+            self._bar_buttons(self.open_btn, self.copy_btn, self.find_btn)
             self.text.insert("end", "Click a sentence to change who said it or to fix the text.\n", ("hint",))
             render_transcript(self.text, self.meeting, self._sentence_clicked)
         self.text.configure(state="disabled")
         self.text.yview_moveto(0)
+        self.find_hits, self.find_index = [], -1  # positions in the old text
+        if self.find_open:
+            self.open_find()  # the same find text, in the new tab
 
     def _sentence_clicked(self, index, event):
         self.app.sentence_menu(self.folder, index, event.x_root - 30, event.y_root + 14)
@@ -292,6 +496,7 @@ class Viewer(ctk.CTkFrame):
             return
         self.editing = True
         self.banner.pack_forget()
+        self.find_bar.pack_forget()
         self._show_text()
         self.text.configure(font=self.fonts["body"], cursor="xterm", undo=True)
         self.text.insert("1.0", path.read_text(encoding="utf-8"))
@@ -322,6 +527,7 @@ class Viewer(ctk.CTkFrame):
             self.speaker_panel = None
         self.title_label.configure(text=title)
         self.meta_label.configure(text="Output of the last job")
+        self.find_bar.pack_forget()
         self.bar.pack_forget()
         self._show_text()
         self.text.insert("end", text, ("log",))
@@ -340,6 +546,7 @@ class Viewer(ctk.CTkFrame):
             self.speaker_panel.destroy()
             self.speaker_panel = None
         self.banner.pack_forget()
+        self.find_bar.pack_forget()
         places = sum(len(r["sentences"]) + len(r["minutes"]) for r in results)
         self.title_label.configure(text=f"Search: {query}")
         self.meta_label.configure(text=f"{places} place{'s' if places != 1 else ''} in {len(results)} "
