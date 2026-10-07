@@ -173,12 +173,12 @@ def main():
 
     def play_clips():
         import winsound
-        while app.worker.status["state"] == "recording":
+        while app.rec.recording():
             winsound.PlaySound(str(clip), winsound.SND_FILENAME)
 
     def step():
         now = time.time()
-        state = app.worker.status["state"]
+        finished = app.jobs.finished[-1] if app.jobs.finished and not app.jobs.busy() else None
         if "idle_start" not in marks:
             marks["idle_start"] = now
             print(f"2/4 app open, idle ({args.baseline} s)")
@@ -192,10 +192,10 @@ def main():
             marks["rec_end"] = now
             print("4/4 processing (transcription, speakers, summary)")
             app.toggle_record()
-        elif "rec_end" in marks and "done" not in marks and state in ("done", "error"):
+        elif "rec_end" in marks and "done" not in marks and not app.rec.recording() and finished:
             marks["done"] = now
-            marks["folder"] = app.worker.status.get("folder")
-            marks["state"] = state
+            marks["folder"] = finished["folder"]
+            marks["state"] = finished["state"]
             print("   done; measuring 15 s more to see if the memory is freed")
         elif "done" in marks and now - marks["done"] >= 15:
             marks["after_end"] = now

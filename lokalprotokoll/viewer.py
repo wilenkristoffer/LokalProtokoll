@@ -510,10 +510,7 @@ class Viewer(ctk.CTkFrame):
         self.reload()
 
     def rewrite_minutes(self):
-        if self.app.worker.busy():
-            messagebox.showinfo("Busy", "Wait until the current job is finished.", parent=self.app)
-            return
-        self.app.worker.run(["summarize", str(self.folder)], self.meeting["name"], self.folder)
+        self.app.run_job(["summarize", str(self.folder)], self.meeting["name"], self.folder)
 
     def show_log(self, title, text):
         """Show plain text (a processing log) in the panel, without tabs."""
@@ -851,8 +848,7 @@ class SpeakerPanel(ctk.CTkFrame):
         to_remember = [n for n, var in self.remember.items() if var.get()]
         if not names and not to_remember:
             return
-        if self.app.worker.busy():
-            messagebox.showinfo("Busy", "Wait until the current job is finished.", parent=self.app)
+        if not self.app._can_edit(self.folder):
             return
         self.stop_playing()
         if to_remember and not self._remember_voices(to_remember):
@@ -861,7 +857,7 @@ class SpeakerPanel(ctk.CTkFrame):
             args = ["rename", str(self.folder)] + names
             if self.rewrite.get():
                 args.append("--summarize")
-            self.app.worker.run(args, self.meeting["name"], self.folder)
+            self.app.run_job(args, self.meeting["name"], self.folder)
 
     def _remember_voices(self, numbers):
         """Save the voices of the ticked speakers under the names typed. Returns False

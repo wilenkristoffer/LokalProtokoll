@@ -45,7 +45,7 @@ ICONS = {"minutes": "\ue8a5", "transcript": "\ue8fd", "speakers": "\ue716", "rew
          "folder": "\ue838", "delete": "\ue74d", "play": "\ue768", "pin": "\ue718", "copy": "\ue8c8",
          "open": "\ue8a7", "more": "\ue712", "import": "\ue8b5", "hidden": "\ued1a", "visible": "\ue890",
          "tray": "\ue921", "log": "\ue9d9", "add": "\ue710", "edit": "\ue70f", "find": "\ue721",
-         "rename": "\ue8ac", "redo": "\ue895"}
+         "rename": "\ue8ac", "redo": "\ue895", "close": "\ue711"}
 
 STEPS = ["convert", "detect", "transcribe", "diarize", "summarize"]
 STEP_LABELS = {"convert": "Converting audio", "detect": "Detecting language",
@@ -137,23 +137,24 @@ def watch_for_second_start(handle, show_requested):
 
 # ---------------------------------------------------------------- background work
 
-class Worker:
-    """Runs one job at a time in a background thread: a recording or an lp.py
-    command. The window reads self.status regularly to show progress."""
+class RecordingWorker:
+    """Records one meeting at a time in a background thread. The window reads
+    self.status regularly to show the timer and the levels. A finished recording
+    is handed to on_recorded(args, name, folder) to be processed, so the next
+    meeting can be recorded right away."""
 
-    def __init__(self, cfg, config_path):
+    def __init__(self, cfg, on_recorded, on_failed):
         self.cfg = cfg
-        self.config_path = config_path
+        self.on_recorded, self.on_failed = on_recorded, on_failed
         self.status = {"state": "idle"}
         self.stop_event = threading.Event()
-        self.proc = None
         self.thread = None
         self.quitting = False
 
-    def busy(self):
-        return self.status["state"] in ("recording", "processing")
+    def recording(self):
+        return self.status["state"] == "recording"
 
-    def start_recording(self, name, num_speakers, mic_only):
+    def start(self, name, num_speakers, mic_only):
         """name "" means: use a placeholder now and a title made from the minutes later."""
         auto_name = not name
         name = name or output.DEFAULT_NAME
@@ -165,7 +166,7 @@ class Worker:
                                        args=(out_dir, name, num_speakers, mic_only, auto_name))
         self.thread.start()
 
-    def stop_recording(self):
+    def stop(self):
         self.stop_event.set()
 
     def _record(self, out_dir, name, num_speakers, mic_only, auto_name):
@@ -176,58 +177,142 @@ class Worker:
                                    auto_name=auto_name)
         except (Exception, SystemExit) as e:
             shutil.rmtree(out_dir, ignore_errors=True)
-            self.status = {"state": "error", "name": name, "message": str(e), "log": [str(e)], "folder": ""}
+            self.status = {"state": "idle"}
+            self.on_failed(name, str(e))
             return
+        self.status = {"state": "idle"}
         if info["duration_s"] < 2:
             shutil.rmtree(out_dir, ignore_errors=True)
-            self.status = {"state": "idle"}
             return
         if self.quitting:
-            return
+            return  # saved: it shows as "not processed" next time
         args = ["process", str(out_dir)]
         if num_speakers:
             args += ["--speakers", str(num_speakers)]
-        self._run_cli(args, name, out_dir)
+        self.on_recorded(args, name, out_dir)
 
-    def run(self, args, name, folder=None):
-        self.status = {"state": "processing", "name": name, "folder": str(folder or ""),
-                       "stage": "Starting", "step": 0, "log": []}
-        self.thread = threading.Thread(target=self._run_cli, args=(args, name, folder), daemon=True)
-        self.thread.start()
 
-    def _run_cli(self, args, name, folder):
-        status = {"state": "processing", "name": name, "folder": str(folder or ""),
-                  "stage": "Starting", "step": 0, "log": []}
-        self.status = status
+class JobQueue:
+    """Runs lp.py commands one at a time in a background thread, in the order they
+    were added (one at a time, so two jobs never share the GPU). Each job is a
+    dict the window reads to show progress: {"id", "args", "name", "folder",
+    "state": waiting/processing/done/error, "stage", "step", "log", "message"}.
+    self.version changes when a job is added, starts, finishes or is removed, so
+    the window knows when to redraw."""
+
+    MAX_FINISHED = 5
+
+    def __init__(self, config_path):
+        self.config_path = config_path
+        self.lock = threading.Condition()
+        self.waiting, self.finished = [], []
+        self.current = None
+        self.proc = None
+        self.version = 0
+        self.next_id = 0
+        self.quitting = False
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _new_job(self, args, name, folder, state):
+        self.next_id += 1
+        return {"id": self.next_id, "args": args, "name": name, "folder": str(folder or ""), "state": state,
+                "stage": "Waiting", "step": 0, "log": [], "message": ""}
+
+    def add(self, args, name, folder=None):
+        with self.lock:
+            self.waiting.append(self._new_job(args, name, folder, "waiting"))
+            self.version += 1
+            self.lock.notify()
+
+    def add_failed(self, name, message):
+        """Show an error that happened outside a job (e.g. the recording failed)."""
+        with self.lock:
+            job = self._new_job([], name, "", "error")
+            job.update(message=message, log=[message])
+            self._finish(job)
+
+    def has(self, folder):
+        """True if a job for this meeting folder is waiting or running."""
+        folder = str(folder)
+        with self.lock:
+            return any(job and job["folder"] == folder for job in self.waiting + [self.current])
+
+    def busy(self):
+        return self.current is not None or bool(self.waiting)
+
+    def cancel(self, job_id):
+        """Remove a waiting job (the running one is not stopped)."""
+        with self.lock:
+            self.waiting = [job for job in self.waiting if job["id"] != job_id]
+            self.version += 1
+
+    def dismiss(self, job_id):
+        with self.lock:
+            self.finished = [job for job in self.finished if job["id"] != job_id]
+            self.version += 1
+
+    def stop(self):
+        """Quitting: forget the waiting jobs and stop the running one."""
+        with self.lock:
+            self.quitting = True
+            self.waiting = []
+            if self.proc:
+                self.proc.terminate()
+
+    def _finish(self, job):
+        self.finished = (self.finished + [job])[-self.MAX_FINISHED:]
+        self.version += 1
+
+    def _loop(self):
+        while True:
+            with self.lock:
+                while not self.waiting:
+                    self.lock.wait()
+                job = self.waiting.pop(0)
+                job.update(state="processing", stage="Starting")
+                self.current = job
+                self.version += 1
+            self._run_cli(job)
+            with self.lock:
+                self.current = None
+                self._finish(job)
+
+    def _run_cli(self, job):
         python = sys.executable.replace("pythonw.exe", "python.exe")
         cmd = [python, str(PROJECT_DIR / "lp.py")]
         if self.config_path:
             cmd += ["--config", str(self.config_path)]
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
-        self.proc = subprocess.Popen(cmd + args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     cwd=PROJECT_DIR, env=env,
-                                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        # Below normal priority: processing may run during the next meeting and
+        # should not take the CPU from the recording or the call itself.
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+        with self.lock:
+            if self.quitting:
+                job.update(state="error", message="Stopped")
+                return
+            self.proc = subprocess.Popen(cmd + job["args"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                         cwd=PROJECT_DIR, env=env, creationflags=flags)
         for raw in self.proc.stdout:
             for line in raw.decode("utf-8", errors="replace").replace("\r", "\n").splitlines():
                 if not line.strip():
                     continue
-                status["log"] = (status["log"] + [line.rstrip()])[-400:]
+                job["log"] = (job["log"] + [line.rstrip()])[-400:]
                 m = re.fullmatch(r"\[([a-z ]+)\]", line.strip())
                 if m:
                     step, _, detail = m.group(1).partition(" ")
                     if step in STEPS:
-                        status["step"] = STEPS.index(step)
-                        status["stage"] = f"{STEP_LABELS[step]} ({detail})" if detail else STEP_LABELS[step]
+                        job["step"] = STEPS.index(step)
+                        job["stage"] = f"{STEP_LABELS[step]} ({detail})" if detail else STEP_LABELS[step]
                 if line.startswith("Output: "):
-                    status["folder"] = line[len("Output: "):].strip()
+                    job["folder"] = line[len("Output: "):].strip()
         self.proc.wait()
-        if status["folder"] and Path(status["folder"]).is_dir():
-            Path(status["folder"], "process.log").write_text("\n".join(status["log"]), encoding="utf-8")
+        if job["folder"] and Path(job["folder"]).is_dir():
+            Path(job["folder"], "process.log").write_text("\n".join(job["log"]), encoding="utf-8")
         if self.proc.returncode == 0:
-            self.status = dict(status, state="done")
+            job["state"] = "done"
         else:
-            tail = [line for line in status["log"] if "progress =" not in line][-6:]
-            self.status = dict(status, state="error", message="\n".join(tail) or "Failed")
+            tail = [line for line in job["log"] if "progress =" not in line][-6:]
+            job.update(state="error", message="\n".join(tail) or "Failed")
         self.proc = None
 
 
@@ -658,8 +743,11 @@ class App(ctk.CTk):
     def __init__(self, cfg, config_path=None, tray=True):
         super().__init__()
         self.cfg = cfg
-        self.worker = Worker(cfg, config_path)
+        self.jobs = JobQueue(config_path)
+        self.rec = RecordingWorker(cfg, self.jobs.add, self.jobs.add_failed)
         self.shown_state = None
+        self.shown_jobs = None  # JobQueue.version the processing card was last drawn for
+        self.notified = set()  # finished jobs the tray has told about
         self.viewer_open = False
         self.closed_width = LEFT_WIDTH
         self.rows = {}
@@ -699,7 +787,7 @@ class App(ctk.CTk):
         self.card.pack(fill="x", padx=14, pady=(4, 10))
         self._build_idle()
         self._build_recording()
-        self._build_processing()
+        self._build_jobs()
         self._build_list()
 
         self.tray = None
@@ -823,18 +911,86 @@ class App(ctk.CTk):
                       fg_color=INK, hover_color=INK_HOVER, text_color=BG,
                       command=self.toggle_record).pack(fill="x", padx=16, pady=(14, 16))
 
-    def _build_processing(self):
-        f = self.processing = ctk.CTkFrame(self.card, fg_color="transparent")
+    def _build_jobs(self):
+        """A card of its own under the recorder: the job being processed, the jobs
+        waiting for it, and the finished ones until they are dismissed. Hidden
+        when there is nothing to show."""
+        self.jobs_card = ctk.CTkFrame(self.left, fg_color=CARD, corner_radius=16, border_width=1, border_color=LINE)
+        f = self.job_now = ctk.CTkFrame(self.jobs_card, fg_color="transparent")
         self.proc_name = ctk.CTkLabel(f, text="", font=self.f_title, text_color=INK, anchor="w")
-        self.proc_name.pack(fill="x", padx=16, pady=(16, 0))
+        self.proc_name.pack(fill="x", padx=16, pady=(12, 0))
         self.proc_stage = ctk.CTkLabel(f, text="", font=self.f_body, text_color=MUTED, anchor="w", justify="left")
         self.proc_stage.pack(fill="x", padx=16)
         self.proc_bar = ctk.CTkProgressBar(f, height=6, corner_radius=3, progress_color=INK, fg_color=LINE)
-        self.proc_bar.pack(fill="x", padx=16, pady=(10, 6))
+        self.proc_bar.pack(fill="x", padx=16, pady=(8, 4))
         self.proc_line = ctk.CTkLabel(f, text="", font=self.f_mono, text_color=MUTED, anchor="w")
-        self.proc_line.pack(fill="x", padx=16, pady=(0, 14))
-        # Only packed when it has buttons (an empty frame would still be 200 px high).
-        self.proc_buttons = ctk.CTkFrame(f, fg_color="transparent", height=0)
+        self.proc_line.pack(fill="x", padx=16, pady=(0, 8))
+        # Waiting and finished jobs, redrawn when the queue changes.
+        self.job_rows = ctk.CTkFrame(self.jobs_card, fg_color="transparent")
+
+    def _render_jobs(self):
+        jobs = self.jobs
+        with jobs.lock:
+            current, waiting, finished = jobs.current, list(jobs.waiting), list(jobs.finished)
+        self.job_now.pack_forget()
+        self.job_rows.pack_forget()
+        for child in self.job_rows.winfo_children():
+            child.destroy()
+        if not (current or waiting or finished):
+            self.jobs_card.pack_forget()
+            return
+        self.jobs_card.pack(fill="x", padx=14, pady=(0, 10), after=self.card)
+        if current:
+            self.proc_name.configure(text=current["name"])
+            self.job_now.pack(fill="x")
+        for i, job in enumerate(waiting):
+            self._job_row(job, f"{'Next' if i == 0 else 'Then'}: {job['name']}", MUTED,
+                          [(ICONS["close"], "", lambda j=job: jobs.cancel(j["id"]), "Remove from the queue")])
+        for job in reversed(finished):
+            folder = Path(job["folder"]) if job["folder"] else None
+            if job["state"] == "done":
+                name = job["name"]
+                if folder and (folder / "meeting.json").exists():
+                    try:  # the meeting may have got a title from its minutes
+                        name = output.load_meeting(folder)["name"]
+                    except (SystemExit, ValueError, KeyError):
+                        pass
+                view = "minutes" if folder and (folder / "summary.md").exists() else "speakers"
+                buttons = [(ICONS["minutes"], "Open", lambda f=folder, v=view, j=job: self._open_job(j, f, v), None)]
+                text, color = f"{CHECK}  {name}", YOU
+            else:
+                log = job["message"] + "\n\n" + "\n".join(job["log"])
+                buttons = [(ICONS["log"], "Log", lambda n=job["name"], t=log: self.open_viewer(log=(f"Log - {n}", t)),
+                            None)]
+                text, color = f"!  Failed: {job['name']}", RED
+            buttons.append((ICONS["close"], "", lambda j=job: jobs.dismiss(j["id"]), "Dismiss"))
+            self._job_row(job, text, color, buttons)
+        self.job_rows.pack(fill="x", pady=(0 if current else 6, 6))
+
+    def _job_row(self, job, text, color, buttons):
+        row = ctk.CTkFrame(self.job_rows, fg_color="transparent")
+        row.pack(fill="x", padx=8, pady=1)
+        for glyph, label, command, tip in reversed(buttons):  # packed first, so a long name cannot push them out
+            button = IconButton(row, self, glyph, label, command, text_color=MUTED, pad=6, height=26)
+            button.pack(side="right", padx=1)
+            if tip:
+                Tooltip(self, button, tip)
+        name = FittedName(row, text, self.f_small, color)
+        name.pack(side="left", fill="x", expand=True, padx=(8, 4))
+
+    def _open_job(self, job, folder, view):
+        self.jobs.dismiss(job["id"])
+        if folder and folder.is_dir():
+            self.open_viewer(folder, view)
+
+    def _update_progress(self, job):
+        self.proc_stage.configure(text=job.get("stage", "") + "...")
+        # whisper and diarization print "progress = 52%"; use it inside the current step.
+        last = next((line for line in reversed(job.get("log", [])) if line.strip()), "")
+        m = re.search(r"progress =\s*(\d+)%", last)
+        within = int(m.group(1)) / 100 if m else 0.1
+        self.proc_bar.set((job.get("step", 0) + within) / len(STEPS))
+        self.proc_line.configure(text=f"{m.group(1)}%" if m else last.strip()[:52])
 
     def _build_list(self):
         # Search all meetings: Enter shows the results in the panel on the right.
@@ -953,18 +1109,19 @@ class App(ctk.CTk):
 
     # ----- actions -----
     def toggle_record(self):
-        state = self.worker.status["state"]
-        if state == "recording":
-            self.worker.stop_recording()
-        elif not self.worker.busy():
+        # Processing runs in its own queue, so a new recording can start while the
+        # last meeting is still being processed.
+        if self.rec.recording():
+            self.rec.stop()
+        else:
             name = self.name_entry.get().strip()
             value = self.speakers_choice
-            self.worker.start_recording(name, 0 if value == "Auto" else int(value), self.mic_only.get())
+            self.rec.start(name, 0 if value == "Auto" else int(value), self.mic_only.get())
+            if name:  # the next meeting gets its own name
+                self.name_entry.delete(0, "end")
+                self.name_entry._activate_placeholder()
 
     def import_file(self):
-        if self.worker.busy():
-            messagebox.showinfo("Busy", "Wait until the current job is finished.", parent=self)
-            return
         path = filedialog.askopenfilename(parent=self, title="Choose a recording",
                                           filetypes=[("Audio/video", "*.wav *.mp3 *.m4a *.mp4 *.mkv *.ogg *.flac *.webm"),
                                                      ("All files", "*.*")])
@@ -975,7 +1132,7 @@ class App(ctk.CTk):
             args += ["--name", self.name_entry.get().strip()]
         if self.speakers_choice != "Auto":
             args += ["--speakers", self.speakers_choice]
-        self.worker.run(args, self.name_entry.get().strip() or Path(path).stem)
+        self.jobs.add(args, self.name_entry.get().strip() or Path(path).stem)
 
     def meeting_menu(self, item, widget):
         folder = item["folder"]
@@ -983,13 +1140,13 @@ class App(ctk.CTk):
             items = [(ICONS["minutes"], "View minutes", lambda: self.open_viewer(folder, "minutes"), False),
                      (ICONS["transcript"], "View transcript", lambda: self.open_viewer(folder, "transcript"), False),
                      (ICONS["speakers"], "Name speakers", lambda: self.open_viewer(folder, "speakers"), False),
-                     (ICONS["rewrite"], "Rewrite minutes", lambda: self.run_job(["summarize", str(folder)], item), False),
+                     (ICONS["rewrite"], "Rewrite minutes", lambda: self.run_job(["summarize", str(folder)], item["name"], folder), False),
                      None,
                      (ICONS["rename"], "Rename...", lambda: self.rename_meeting(item, widget), False),
                      (ICONS["redo"], "Redo speakers...", lambda: self.redo_speakers(item, widget), False),
                      (ICONS["find"], "Find and replace...", lambda: self.find_replace(item, widget), False)]
         else:
-            items = [(ICONS["play"], "Process now", lambda: self.run_job(["process", str(folder)], item), False)]
+            items = [(ICONS["play"], "Process now", lambda: self.run_job(["process", str(folder)], item["name"], folder), False)]
         items += [None,
                   (ICONS["folder"], "Open folder", lambda: open_path(folder), False),
                   (ICONS["delete"], "Delete", lambda: self.delete_meeting(item), True)]
@@ -997,8 +1154,9 @@ class App(ctk.CTk):
 
     # ----- corrections (lokalprotokoll/edit.py; quick, so they run here directly) -----
     def _can_edit(self, folder):
-        if self.worker.busy() and self.worker.status.get("folder") == str(folder):
-            messagebox.showinfo("Busy", "This meeting is being processed. Wait until it is finished.", parent=self)
+        if self.jobs.has(folder):
+            messagebox.showinfo("Busy", "This meeting is being processed or waiting to be. Wait until it is "
+                                "finished.", parent=self)
             return False
         return True
 
@@ -1034,7 +1192,7 @@ class App(ctk.CTk):
                     "numbered again. Continue?", parent=self):
                 return
             args = ["rediarize", str(folder), "--summarize", "--speakers", "0" if choice == "Auto" else str(choice)]
-            self.run_job(args, item)
+            self.run_job(args, item["name"], folder)
         NumberPicker(self, (["Auto"] + list(range(1, 21)), None, run, "Redo speakers: how many?",
                             "Finds the speakers again and rewrites the minutes. The transcription is kept."),
                      *self._popup_at(widget))
@@ -1158,14 +1316,17 @@ class App(ctk.CTk):
             PromptPopup(self, ("Fix the text", [("", seg["text"])], save, "Save"), x, y)
         SpeakerPicker(self, (meeting, index, set_speaker, fix_text), x, y)
 
-    def run_job(self, args, item):
-        if self.worker.busy():
-            messagebox.showinfo("Busy", "Wait until the current job is finished.", parent=self)
-            return
-        self.worker.run(args, item["name"], item["folder"])
+    def run_job(self, args, name, folder):
+        """Add a job for a meeting to the processing queue. Returns False if that
+        meeting already has a job waiting or running."""
+        if self.jobs.has(folder):
+            messagebox.showinfo("Busy", "This meeting is already being processed or waiting to be.", parent=self)
+            return False
+        self.jobs.add(args, name, folder)
+        return True
 
     def delete_meeting(self, item):
-        if self.worker.busy() and self.worker.status.get("folder") == str(item["folder"]):
+        if not self._can_edit(item["folder"]):
             return
         if messagebox.askyesno("Delete meeting", f"Delete \"{item['name']}\" and all its files?",
                                icon="warning", parent=self):
@@ -1207,6 +1368,8 @@ class App(ctk.CTk):
         meta = f"{when} {MIDDOT} {fmt_duration(item['duration_s'])}"
         if item["processed"]:
             meta += f" {MIDDOT} {item['speakers']} speaker{'s' if item['speakers'] != 1 else ''}"
+        elif self.jobs.has(item["folder"]):
+            meta += f" {MIDDOT} in the processing queue"
         else:
             meta += f" {MIDDOT} not processed"
         meta_label = ctk.CTkLabel(text, text=meta, font=self.f_small, text_color=MUTED, anchor="w")
@@ -1224,11 +1387,9 @@ class App(ctk.CTk):
     def show_card(self, name):
         if self.shown_state == name:
             return
-        for frame in (self.idle, self.recording, self.processing):
+        for frame in (self.idle, self.recording):
             frame.pack_forget()
-        if name == "processing":
-            self.proc_stage.configure(text_color=MUTED)
-        {"idle": self.idle, "recording": self.recording, "processing": self.processing}[name].pack(fill="x")
+        {"idle": self.idle, "recording": self.recording}[name].pack(fill="x")
         self.shown_state = name
 
     def tick(self):
@@ -1236,96 +1397,50 @@ class App(ctk.CTk):
         if self.show_requested.is_set():
             self.show_requested.clear()
             self.show_window()
-        st = self.worker.status
-        state = st["state"]
+        self._tick_recording()
+        self._tick_jobs()
+        self.after(100, self.tick)
+
+    def _tick_recording(self):
+        st = self.rec.status
+        recording = st["state"] == "recording"
         if self.tray:
-            self.tray.set_recording(state == "recording")
-        if state == "recording":
-            if self.shown_state != "recording":
-                self.show_card("recording")
-                self.rec_name.configure(text=st.get("name", ""))
-                system_row = self.meters["system"][0]
-                if st.get("mic_only"):
-                    system_row.pack_forget()
-                else:
-                    system_row.pack(fill="x", padx=18, pady=3, after=self.meters["mic"][0])
-            elapsed = st.get("elapsed", 0)
-            self.timer.configure(text=fmt_duration(elapsed))
-            for key, (row, bar) in self.meters.items():
-                bar.set(st.get("levels", {}).get(key, 0))
-            # The red dot blinks once per second.
-            self.rec_dot.configure(text_color=RED if int(elapsed * 2) % 2 == 0 else CARD)
-        elif state == "processing":
-            self.show_card("processing")
-            self.proc_name.configure(text=st.get("name", ""))
-            self.proc_stage.configure(text=st.get("stage", "") + "...")
-            # whisper and diarization print "progress = 52%"; use it inside the current step.
-            last = next((line for line in reversed(st.get("log", [])) if line.strip()), "")
-            m = re.search(r"progress =\s*(\d+)%", last)
-            within = int(m.group(1)) / 100 if m else 0.1
-            self.proc_bar.set((st.get("step", 0) + within) / len(STEPS))
-            self.proc_line.configure(text=f"{m.group(1)}%" if m else last.strip()[:52])
-            if self.proc_buttons.winfo_children():
-                self._set_proc_buttons([])
-        elif state in ("done", "error"):
-            if self.shown_state != state:
-                self.show_card("processing")
-                self.shown_state = state
-                self.refresh_list()
-                self._show_result(st)
-                folder = Path(st["folder"]) if st.get("folder") else None
+            self.tray.set_recording(recording)
+        if not recording:
+            self.show_card("idle")
+            return
+        if self.shown_state != "recording":
+            self.show_card("recording")
+            self.rec_name.configure(text=st.get("name", ""))
+            system_row = self.meters["system"][0]
+            if st.get("mic_only"):
+                system_row.pack_forget()
+            else:
+                system_row.pack(fill="x", padx=18, pady=3, after=self.meters["mic"][0])
+        elapsed = st.get("elapsed", 0)
+        self.timer.configure(text=fmt_duration(elapsed))
+        for key, (row, bar) in self.meters.items():
+            bar.set(st.get("levels", {}).get(key, 0))
+        # The red dot blinks once per second.
+        self.rec_dot.configure(text_color=RED if int(elapsed * 2) % 2 == 0 else CARD)
+
+    def _tick_jobs(self):
+        if self.shown_jobs != self.jobs.version:
+            self.shown_jobs = self.jobs.version
+            self._render_jobs()
+            self.refresh_list()  # rows show "waiting" / "processing", and finished meetings
+            with self.jobs.lock:
+                new = [job for job in self.jobs.finished if job["id"] not in self.notified]
+            for job in new:
+                self.notified.add(job["id"])
+                folder = Path(job["folder"]) if job["folder"] else None
                 if self.viewer_open and folder and self.viewer.folder == folder:
                     self.viewer.reload()
                 if self.tray and self.state() == "withdrawn":
-                    self.tray.notify(f"{'Ready' if state == 'done' else 'Failed'}: {self.proc_name.cget('text')}")
-        else:
-            self.show_card("idle")
-        self.after(100, self.tick)
-
-    def _show_result(self, st):
-        folder = Path(st["folder"]) if st.get("folder") else None
-        name = st.get("name", "")
-        if folder and (folder / "meeting.json").exists():
-            # The meeting may have got a title from its minutes while processing.
-            try:
-                name = output.load_meeting(folder)["name"]
-            except (SystemExit, ValueError, KeyError):
-                pass
-        self.proc_name.configure(text=name)
-        if st["state"] == "done":
-            self.proc_stage.configure(text=f"{CHECK}  Done", text_color=YOU)
-            self.proc_bar.set(1)
-            self.proc_line.configure(text="")
-            buttons = []
-            if folder and (folder / "summary.md").exists():
-                buttons.append(("Minutes", lambda: self.open_viewer(folder, "minutes")))
-            if folder and (folder / "meeting.json").exists():
-                buttons.append(("Speakers", lambda: self.open_viewer(folder, "speakers")))
-        else:
-            self.proc_stage.configure(text="Something went wrong", text_color=RED)
-            lines = st.get("message", "").splitlines()
-            self.proc_line.configure(text=lines[-1][:52] if lines else "")
-            log = st.get("message", "") + "\n\n" + "\n".join(st.get("log", []))
-            buttons = [("Show log", lambda: self.open_viewer(log=(f"Log - {st.get('name', '')}", log)))]
-        buttons.append(("OK", self.dismiss))
-        self._set_proc_buttons(buttons)
-
-    def _set_proc_buttons(self, buttons):
-        for child in self.proc_buttons.winfo_children():
-            child.destroy()
-        if not buttons:
-            self.proc_buttons.pack_forget()
-            return
-        self.proc_buttons.pack(fill="x", padx=12, pady=(0, 14))
-        for i, (text, command) in enumerate(buttons):
-            last = i == len(buttons) - 1
-            ctk.CTkButton(self.proc_buttons, text=text, width=10, height=34, corner_radius=10, font=self.f_small,
-                          fg_color=INK if last else BG, hover_color=INK_HOVER if last else LINE,
-                          text_color=BG if last else INK, border_width=0 if last else 1, border_color=LINE,
-                          command=command).pack(side="left", expand=True, fill="x", padx=4)
-
-    def dismiss(self):
-        self.worker.status = {"state": "idle"}
+                    self.tray.notify(f"{'Ready' if job['state'] == 'done' else 'Failed'}: {job['name']}")
+        current = self.jobs.current
+        if current:
+            self._update_progress(current)
 
     # ----- tray and closing -----
     def _handle_tray(self):
@@ -1367,22 +1482,22 @@ class App(ctk.CTk):
             self.quit_app()
 
     def quit_app(self):
-        state = self.worker.status["state"]
-        if state in ("recording", "processing"):
+        recording, processing = self.rec.recording(), self.jobs.busy()
+        if recording or processing:
             self.show_window()
-        if state == "recording":
-            if not messagebox.askyesno("Recording", "Stop the recording and quit?\n"
-                                       "It is saved and can be processed later.", parent=self):
-                return
-            self.worker.quitting = True
-            self.worker.stop_recording()
-            if self.worker.thread:
-                self.worker.thread.join(timeout=5)
-        elif state == "processing":
-            if not messagebox.askyesno("Processing", "Processing is still running. Stop it and quit?", parent=self):
-                return
-            if self.worker.proc:
-                self.worker.proc.terminate()
+        if recording and not messagebox.askyesno("Recording", "Stop the recording and quit?\n"
+                                                 "It is saved and can be processed later.", parent=self):
+            return
+        if processing and not messagebox.askyesno(
+                "Processing", "Processing is still running. Stop it and quit?\n"
+                "Recordings that are not processed yet stay in the list and can be processed later.", parent=self):
+            return
+        if recording:
+            self.rec.quitting = True
+            self.rec.stop()
+            if self.rec.thread:
+                self.rec.thread.join(timeout=5)
+        self.jobs.stop()
         self.viewer.stop_audio()
         if self.tray:
             self.tray.stop()

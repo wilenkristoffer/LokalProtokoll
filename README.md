@@ -133,7 +133,13 @@ The rest of the window:
   command line when no `--name` is given. The prompt is `prompts\title_sv.txt` / `title_en.txt`.
 - **Record**: type a meeting name and choose how many *other* people are in the meeting ("Auto" if unsure). Press
   Record (or Ctrl+R), and press Stop when you are done. The meeting is then processed automatically, with the
-  progress shown in the window. "In the room" records only the microphone, for in-person meetings.
+  progress shown in a card of its own under Record. "In the room" records only the microphone, for in-person
+  meetings.
+- **Back-to-back meetings**: you do not have to wait for the processing. Record is available again as soon as you
+  press Stop, and the next meeting can be recorded while the last one is processed. Recordings, imports and other
+  jobs (rewrite minutes, redo speakers, rename) wait in a queue and are processed one at a time, in order, at
+  below-normal priority so they do not slow down the recording or the call. The card shows what is processing,
+  what is next (X removes it from the queue), and the finished ones with **Open** or **Log** until you dismiss them.
 - **Meetings**: click a meeting to open its minutes in a panel on the right side of the window. The panel has three
   tabs:
   - **Minutes**: the summary.
