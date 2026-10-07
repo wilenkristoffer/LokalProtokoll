@@ -83,6 +83,16 @@ disable_thinking = true
 unload_after = true
 # Tokens kept free for the answer. Longer transcripts are split into chunks.
 reserve_tokens = 3000
+# Also split transcripts longer than this (tokens) even if they fit in num_ctx: each
+# part becomes notes, then the notes become the minutes. Keeps more details on long
+# meetings but takes longer. 0 = split only when the transcript does not fit.
+chunk_tokens = 0
+# Second pass: the model checks the minutes against the transcript and fixes numbers,
+# names and words that were not said. About as long again as writing the minutes.
+verify = true
+# Flag health, security, personal details and internal numbers in the minutes, with a
+# suggested rewording, under "Granska fore delning" at the end of summary.md.
+sensitivity_check = true
 # Used to estimate token count from text length.
 chars_per_token = 3.5
 # Models for: python lp.py compare <meeting folder>
@@ -95,6 +105,11 @@ summary_sv = "prompts/summary_sv.txt"
 summary_en = "prompts/summary_en.txt"
 chunk_sv = "prompts/chunk_sv.txt"
 chunk_en = "prompts/chunk_en.txt"
+# Check pass and sensitivity check. Placeholders: {transcript} {summary}
+verify_sv = "prompts/verify_sv.txt"
+verify_en = "prompts/verify_en.txt"
+sensitive_sv = "prompts/sensitive_sv.txt"
+sensitive_en = "prompts/sensitive_en.txt"
 # Used when a meeting has no name: the title is made from the minutes. Placeholder: {summary}
 title_sv = "prompts/title_sv.txt"
 title_en = "prompts/title_en.txt"

@@ -1,8 +1,12 @@
 """Summarize a transcript with a local Ollama model.
 
 Short transcripts are sent in one request. If the transcript does not fit in
-num_ctx, it is split into chunks, each chunk is turned into notes, and the notes
-are summarized with the normal summary prompt.
+num_ctx (or is longer than chunk_tokens), it is split into chunks, each chunk is
+turned into notes, and the notes are summarized with the normal summary prompt.
+
+Then the draft is checked against its source in a second request (verify), and
+review_notes() lists what a person should look at before sharing: numbers and
+names that are not in the transcript, and sensitive details.
 """
 
 import json
@@ -12,7 +16,7 @@ import urllib.error
 import urllib.request
 
 from .config import read_text
-from .output import transcript_lines
+from .output import participants, transcript_lines
 
 
 def _post(url, body, timeout=3600):
@@ -41,15 +45,19 @@ def check_model(cfg, model):
         raise SystemExit(f"Ollama model {model} is not installed. Run: ollama pull {model}")
 
 
-def chat(cfg, model, prompt):
-    """One chat request. Returns (text, stats)."""
+def chat(cfg, model, prompt, temperature=None, max_tokens=None):
+    """One chat request. Returns (text, stats). max_tokens caps the answer: at
+    temperature 0 a model can get stuck repeating a line until num_ctx is full."""
     s = cfg["summarize"]
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "options": {"num_ctx": s["num_ctx"], "temperature": s["temperature"]},
+        "options": {"num_ctx": s["num_ctx"],
+                    "temperature": s["temperature"] if temperature is None else temperature},
     }
+    if max_tokens:
+        body["options"]["num_predict"] = max_tokens
     if s.get("disable_thinking"):
         body["think"] = False
     url = s["ollama_url"] + "/api/chat"
@@ -99,10 +107,16 @@ def model_memory(cfg, model):
     return None, None, None
 
 
+def _prompt_path(cfg, key):
+    """Prompt files added later may be missing from an older config.toml."""
+    return cfg["prompts"].get(key, f"prompts/{key}.txt")
+
+
 def _fill(template, meeting, transcript, **extra):
     text = (template.replace("{transcript}", transcript)
             .replace("{meeting_name}", meeting["name"])
-            .replace("{date}", meeting["date"]))
+            .replace("{date}", meeting["date"])
+            .replace("{participants}", ", ".join(participants(meeting))))
     for key, value in extra.items():
         text = text.replace("{" + key + "}", str(value))
     return text
@@ -144,22 +158,157 @@ def summarize(cfg, meeting, model):
     transcript = "\n".join(lines)
 
     budget_chars = int((s["num_ctx"] - s["reserve_tokens"]) * s["chars_per_token"]) - len(summary_prompt)
+    if s.get("chunk_tokens"):
+        budget_chars = min(budget_chars, int(s["chunk_tokens"] * s["chars_per_token"]))
     start = time.perf_counter()
     if len(transcript) <= budget_chars:
         print(f"    ~{int(len(transcript) / s['chars_per_token'])} tokens, one request")
+        source = transcript
         text, stats = chat(cfg, model, _fill(summary_prompt, meeting, transcript))
         stats["chunks"] = 1
     else:
         chunk_prompt = read_text(cfg["prompts"][f"chunk_{lang}"])
         chunks = _split(lines, budget_chars)
-        print(f"    Transcript too long for num_ctx={s['num_ctx']}, using {len(chunks)} chunks")
+        print(f"    ~{int(len(transcript) / s['chars_per_token'])} tokens, using {len(chunks)} chunks")
         notes = []
         for i, chunk in enumerate(chunks, 1):
             print(f"    chunk {i}/{len(chunks)}")
             note, _ = chat(cfg, model, _fill(chunk_prompt, meeting, chunk, part=i, parts=len(chunks)))
             notes.append(f"--- {i}/{len(chunks)} ---\n{note}")
-        text, stats = chat(cfg, model, _fill(summary_prompt, meeting, "\n\n".join(notes)))
+        source = "\n\n".join(notes)
+        text, stats = chat(cfg, model, _fill(summary_prompt, meeting, source))
         stats["chunks"] = len(chunks)
+    if s.get("verify", True):
+        text = verify(cfg, meeting, model, text, source)
+    text = _checkboxes(text)
     stats["seconds"] = round(time.perf_counter() - start, 1)
     stats["gpu_percent"], stats["vram_mb"], stats["model_mb"] = model_memory(cfg, model)
     return text, stats
+
+
+def _checkboxes(text):
+    """Action items as "- [ ]" tasks: the model sometimes writes them as plain bullets."""
+    lines, in_tasks = [], False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            in_tasks = line[3:].strip() in ("\xc5tg\xe4rdspunkter", "Action items")
+        elif in_tasks:
+            line = re.sub(r"^[-*] (?!\[[ xX]\] )", "- [ ] ", line)
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def verify(cfg, meeting, model, draft, source):
+    """Second pass: the model checks its draft against the transcript (or the chunk
+    notes it was made from) and lists corrections as "wrong" -> "right". Catches words
+    nobody said and broken tokens such as "ej ang evicted".
+
+    The model does not write the minutes out again: copying 1-2k tokens is exactly
+    where a 12B model drops in new typos (measured: it fixed one and added two). A
+    correction is applied only where its wrong text occurs verbatim in the draft."""
+    s = cfg["summarize"]
+    lang = "sv" if meeting["language"] == "sv" else "en"
+    prompt = _fill(read_text(_prompt_path(cfg, f"verify_{lang}")), meeting, source).replace("{summary}", draft)
+    if len(prompt) > (s["num_ctx"] - 1000) * s["chars_per_token"]:
+        print("    verify skipped: transcript and draft do not fit in num_ctx")
+        return draft
+    answer, _ = chat(cfg, model, prompt, temperature=0, max_tokens=1000)
+    text, applied = draft, 0
+    # One correction per line, each side up to its last quote: the minutes quote names
+    # ("Oil price"), and a lazy match would cut the right side at the first inner quote.
+    pairs = re.findall(r'(?m)^[^"\n]*"(.+)"\s*->\s*"(.*)"[^"\n]*$', answer)
+    for wrong, right in dict.fromkeys(pairs):
+        # Never touch the headings, and never replace text with itself.
+        if wrong == right or wrong.startswith("#") or wrong not in text:
+            continue
+        text = text.replace(wrong, right, 1)
+        applied += 1
+    text = re.sub(r"(?m)^\s*[-*]\s*\.?\s*$\n?", "", text)  # bullets emptied by a removal
+    print(f"    verify: {applied} correction(s)")
+    return text
+
+
+# Number words, so that "tre veckor" in the transcript matches "3 veckor" in the minutes.
+# (\xe5 = a-ring, to keep this file ASCII.)
+NUMBER_WORDS = {
+    "sv": ["noll", "en|ett", "tv\xe5", "tre", "fyra", "fem", "sex", "sju", "\xe5tta", "nio", "tio",
+           "elva", "tolv", "tretton", "fjorton", "femton", "sexton", "sjutton", "arton", "nitton",
+           "tjugo"],
+    "en": ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+           "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+           "eighteen", "nineteen", "twenty"],
+}
+ROUND_WORDS = {
+    "sv": {30: "trettio", 40: "fyrtio", 50: "femtio", 60: "sextio", 70: "sjuttio",
+           80: "\xe5ttio", 90: "nittio", 100: "hundra", 1000: "tusen"},
+    "en": {30: "thirty", 40: "forty", 50: "fifty", 60: "sixty", 70: "seventy",
+           80: "eighty", 90: "ninety", 100: "hundred", 1000: "thousand"},
+}
+
+
+def _number_said(number, transcript, lang):
+    if re.search(rf"(?<![\d,.]){re.escape(number)}(?!\d|[,.]\d)", transcript):
+        return True
+    if not number.isdigit():
+        return False
+    n = int(number)
+    words = NUMBER_WORDS[lang][n] if n < len(NUMBER_WORDS[lang]) else ROUND_WORDS[lang].get(n)
+    return bool(words) and re.search(rf"\b({words})\b", transcript, re.IGNORECASE) is not None
+
+
+def unsupported(meeting, summary):
+    """Numbers and names in the minutes that do not occur in the transcript. A plain
+    text check, so it also catches what the verify pass missed. Returns (numbers, names)."""
+    lang = "sv" if meeting["language"] == "sv" else "en"
+    # Without the timestamps, which contain almost every number below 60.
+    transcript = "\n".join(re.sub(r"^\[[\d:]+\] ", "", line) for line in transcript_lines(meeting))
+    lower = transcript.lower()
+    known = (meeting["name"] + " " + " ".join(participants(meeting))).lower()
+    numbers, names = [], []
+    for line in summary.splitlines():
+        if line.startswith("#"):
+            continue
+        body = re.sub(r"^\s*[-*]\s+(\[.\]\s+)?", "", line).replace("**", "")
+        for number in re.findall(r"(?<![\w-])\d+(?:[,.]\d+)?(?![\w-])", body):
+            if number not in numbers and not _number_said(number, transcript, lang):
+                numbers.append(number)
+        # Capitalized words that do not start a sentence: names, products, systems.
+        for m in re.finditer(r"(?<=[^.:!?\s(\"]\s)([A-Z\xc5\xc4\xd6][\w-]+)", body):
+            word = m.group(1)
+            base = word.lower()[:-1] if word.lower().endswith("s") else word.lower()  # "Eriks"
+            if base not in lower and base not in known and word not in names:
+                names.append(word)
+    return numbers, names
+
+
+def sensitive(cfg, meeting, model, summary):
+    """Details that may be sensitive to share (health, security, personal, internal
+    numbers), each with a suggested rewording. A finding whose quote is not in the
+    minutes is dropped, since the model sometimes makes them up."""
+    lang = "sv" if meeting["language"] == "sv" else "en"
+    prompt = read_text(_prompt_path(cfg, f"sensitive_{lang}")).replace("{summary}", summary)
+    text, _ = chat(cfg, model, prompt, temperature=0, max_tokens=800)
+    plain = re.sub(r"\s+", " ", summary.replace("**", "")).lower()
+    findings = []
+    for line in text.splitlines():
+        m = re.match(r'\s*[-*]\s+.*?"(.+?)"', line)
+        if m and re.sub(r"\s+", " ", m.group(1)).lower().strip(" .") in plain:
+            findings.append("- " + re.sub(r"^\s*[-*]\s+", "", line).strip())
+    return findings
+
+
+def review_notes(cfg, meeting, model, summary):
+    """Lines for the "check before sharing" section of summary.md. Empty if nothing was found."""
+    sv = meeting["language"] == "sv"
+    numbers, names = unsupported(meeting, summary)
+    lines = []
+    if numbers:
+        lines.append(("- Siffror som inte finns i transkriberingen: " if sv else
+                      "- Numbers that are not in the transcript: ") + ", ".join(numbers))
+    if names:
+        lines.append(("- Namn och begrepp som inte finns i transkriberingen: " if sv else
+                      "- Names and terms that are not in the transcript: ") + ", ".join(names))
+    if cfg["summarize"].get("sensitivity_check", True):
+        print("    sensitivity check")
+        lines += sensitive(cfg, meeting, model, summary)
+    return lines

@@ -2,15 +2,18 @@ Nedan följer del {part} av {parts} av en automatisk transkribering av ett möte
 Varje rad börjar med en tidsstämpel och talare.
 
 Möte: {meeting_name}
+Deltagare: {participants}
 
 <transkribering>
 {transcript}
 </transkribering>
 
 Skriv detaljerade anteckningar på svenska om just denna del, som punktlista:
-- viktiga ämnen och vad som sades om dem
+- viktiga ämnen och vad som sades om dem, av vem och varför
+- siffror, antal, datum, tider, system och namn, exakt som de sades
 - beslut som fattades
+- förslag som diskuterades men valdes bort eller sköts upp
 - uppgifter som delades ut, med ansvarig och deadline om det nämns
 - frågor som lämnades öppna
-Behåll talare och tidsstämplar där det hjälper. Hitta inte på något.
-Skriv bara anteckningarna.
+Behåll talare och tidsstämplar där det hjälper. Använd mötets egna ord.
+Hitta inte på något. Skriv bara anteckningarna.

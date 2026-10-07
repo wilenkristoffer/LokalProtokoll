@@ -109,8 +109,11 @@ def run_summary(cfg, meeting, out_dir, timer, model):
                 print(f"    title: {title}")
                 output.write_transcript_md(meeting, out_dir)
                 speakers.write_html(meeting, out_dir)
+        review = summarize.review_notes(cfg, meeting, model, text)
+        print(f"    {len(review)} point(s) to check before sharing")
     lang = "sv" if meeting["language"] == "sv" else "en"
-    output.write_summary_md(meeting, text, model, cfg["prompts"][f"consent_note_{lang}"], out_dir)
+    output.write_summary_md(meeting, text, model, cfg["prompts"][f"consent_note_{lang}"], out_dir,
+                            review=review)
     summarize.unload(cfg, model)  # free the GPU memory and RAM right away
     meeting["summary_model"] = model
     meeting.pop("summary_stale", None)  # the minutes match the transcript again

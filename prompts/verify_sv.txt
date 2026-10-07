@@ -1,0 +1,22 @@
+Nedan följer en automatisk transkribering av ett möte och ett utkast till protokoll
+som en AI skrev utifrån den.
+
+<transkribering>
+{transcript}
+</transkribering>
+
+<utkast>
+{summary}
+</utkast>
+
+Granska utkastet mot transkriberingen, rad för rad. Leta efter:
+- siffror, antal, datum, tider och namn som inte stämmer med transkriberingen
+- ord och begrepp som inte används i mötet, där mötet använde ett annat ord
+- påståenden som inte stöds av transkriberingen
+- trasiga eller felstavade ord, och ord som inte hör hemma i meningen
+
+Skriv en rad per fel, exakt i detta format:
+"felaktig text ur utkastet" -> "rättad text"
+Den felaktiga texten ska vara kopierad tecken för tecken ur utkastet, bara de ord som
+behöver ändras och några ord runt dem. Ska texten strykas helt, skriv -> "".
+Skriv bara raderna, ingen annan kommentar. Om du inte hittar några fel, svara bara: Inga fel.

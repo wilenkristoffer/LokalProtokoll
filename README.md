@@ -1,16 +1,26 @@
 # LokalProtokoll
 
 Local meeting transcriber and summarizer. It takes an audio file and produces a
-transcript with speakers and timestamps, plus minutes (summary, decisions, action
-items, open questions). Everything runs on your own PC: no cloud, no time limits.
+transcript with speakers and timestamps, plus minutes (short summary, discussion by
+topic, decisions, what was deprioritized, action items, open questions). Everything
+runs on your own PC: no cloud, no time limits.
 
 ```
 audio file -> ffmpeg (16 kHz mono wav)
            -> whisper.cpp + Vulkan (KB-Whisper for Swedish, Whisper turbo for English)
            -> sherpa-onnx speaker diarization (TitaNet voice model)
            -> merge speakers with text by timestamp
-           -> Ollama (local LLM) -> summary.md
+           -> Ollama (local LLM) -> minutes -> check against the transcript -> summary.md
 ```
+
+After the minutes are written, the model checks them against the transcript and lists
+corrections (wrong numbers, words nobody said, broken words). Only corrections whose
+text is found in the minutes are applied, so the check cannot add new errors. Then
+`summary.md` gets a "Granska före delning" / "Check before sharing" section at the end:
+numbers and names that are not in the transcript, and details that may be sensitive to
+share (health, security, personal, internal numbers) with a suggested rewording. Delete
+that section before you share the minutes. Turn the steps off with `verify` and
+`sensitivity_check` in `config.toml`. Together they add about 45 s for a 1 hour meeting.
 
 ## Setup on a clean Windows machine
 
@@ -183,7 +193,7 @@ The output goes to `meetings\<date>_<time>_<name>\`:
 | File | Content |
 |---|---|
 | `transcript.md` | Transcript with speakers and timestamps |
-| `summary.md` | Summary, decisions, action items, open questions |
+| `summary.md` | Minutes, and at the end what to check before sharing them |
 | `meeting.json` | All segments with speaker, plus metadata and timings (used for re-processing) |
 | `speakers.html`, `speakers\` | A voice sample per speaker, with play buttons (see "Naming the speakers") |
 | `whisper.json`, `diarization.json` | Raw output from each stage |

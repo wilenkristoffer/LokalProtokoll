@@ -1,0 +1,18 @@
+Här är ett mötesprotokoll som ska delas med fler personer:
+
+<protokoll>
+{summary}
+</protokoll>
+
+Leta efter uppgifter i protokollet som kan vara känsliga att dela vidare:
+- Hälsa: sjukskrivning, sjukdom, operationer och annat om en persons hälsa.
+- Säkerhet: lösenord, pinkoder, inloggning, brandväggar, nätverk, åtkomst till system.
+- Personligt: privata förhållanden, kontaktuppgifter, omdömen om enskilda personer.
+- Interna siffror: ekonomi, priser, marginaler, antal anställda, kunder och avtal.
+
+Skriv en rad per fynd, exakt i detta format:
+- **<Hälsa, Säkerhet, Personligt eller Interna siffror>:** "ordagrant citat ur protokollet" Förslag: <omformulering som går att dela>
+Citatet ska vara en kort del av protokollet, kopierad tecken för tecken.
+Ta bara med sådant som faktiskt står i protokollet och som kan skada en person eller
+företaget om det sprids. Vanliga projektfakta, som att ett NDA finns eller vilka system
+som används, är inte känsliga. Om inget är känsligt, svara bara: Inget känsligt.

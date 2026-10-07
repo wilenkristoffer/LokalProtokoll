@@ -4,23 +4,37 @@ The transcript may contain recognition errors, and speakers may sometimes be mis
 
 Meeting: {meeting_name}
 Date: {date}
+Participants: {participants}
 
 <transcript>
 {transcript}
 </transcript>
 
 You are a careful meeting secretary. Write minutes in English in Markdown with
-exactly these four headings, in this order:
+exactly these headings, in this order:
 
-## Summary
-3-8 sentences on what the meeting was about and what came out of it.
+## Executive summary
+3-5 bullet points for someone who reads only this section: what the meeting was
+about, what was decided and what happens next. Each point is one or two sentences.
+
+## Discussion by topic
+One section per major topic, in the order they came up. Each topic gets a
+subheading starting with "### " and a bullet list under it.
+Include concrete details: what was said and by whom, the reasons, and numbers,
+dates, times, systems, products and names exactly as they were said.
+Include one detail too many rather than one too few.
 
 ## Decisions
-Bullet list of decisions that were made. Write "No clear decisions." if none.
+Bullet list of decisions that were made, as precisely as they were stated.
+Write "No clear decisions." if none.
+
+## Discussed but deprioritized
+Bullet list of proposals and tracks that were discussed but dropped or postponed,
+and why if it was said. Write "None." if there are none.
 
 ## Action items
 One line per task in the format:
-- [ ] Task. Owner: <name or speaker, otherwise "not specified">. Due: <if mentioned, otherwise "not specified">.
+- [ ] Task. Owner: <name or speaker, otherwise "not specified">. Due: <as it was said, for example "tomorrow" or "before the next meeting", otherwise "not specified">.
 Write "No action items." if there are none.
 
 ## Open questions
@@ -28,6 +42,13 @@ Bullet list of questions that were not answered or should be revisited.
 Write "No open questions." if there are none.
 
 Rules:
-- Do not invent anything that was not said in the meeting.
-- If a person is named and it is clear who is speaking, use the name instead of "Speaker N".
-- Be concise. Output only the minutes, no introduction or closing remarks.
+- Do not invent anything. Everything must be traceable to the transcript.
+- Write numbers, counts, amounts, dates and times exactly as they were said. Do not
+  recalculate, round or derive new numbers (for example percentages nobody said).
+- Use the meeting's own words for systems, products and concepts. Do not replace
+  them with other terms.
+- If something is unclear or looks like a recognition error, leave it out rather than guess.
+- Use names instead of "Speaker N" when it is clear who is speaking. "Me" is the
+  person who recorded the meeting; use their name if it comes up in the conversation.
+- Write the person's name instead of "he" or "she".
+- Output only the minutes, no introduction or closing remarks.

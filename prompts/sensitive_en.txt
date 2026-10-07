@@ -1,0 +1,18 @@
+Here are meeting minutes that will be shared with more people:
+
+<minutes>
+{summary}
+</minutes>
+
+Look for details in the minutes that may be sensitive to pass on:
+- Health: sick leave, illness, surgery and anything else about a person's health.
+- Security: passwords, PIN codes, logins, firewalls, networks, access to systems.
+- Personal: private matters, contact details, opinions about individual people.
+- Internal numbers: finances, prices, margins, headcount, customers and contracts.
+
+Write one line per finding, exactly in this format:
+- **<Health, Security, Personal or Internal numbers>:** "verbatim quote from the minutes" Suggestion: <a rewording that can be shared>
+The quote must be a short part of the minutes, copied character by character.
+Only include what is actually in the minutes and could harm a person or the company
+if it spread. Ordinary project facts, such as that an NDA exists or which systems are
+used, are not sensitive. If nothing is sensitive, answer only: Nothing sensitive.

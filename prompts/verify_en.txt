@@ -1,0 +1,21 @@
+Below is an automatic meeting transcript and a draft of minutes that an AI wrote from it.
+
+<transcript>
+{transcript}
+</transcript>
+
+<draft>
+{summary}
+</draft>
+
+Check the draft against the transcript, line by line. Look for:
+- numbers, counts, dates, times and names that do not match the transcript
+- words and concepts that were not used in the meeting, where the meeting used another word
+- statements that the transcript does not support
+- broken or misspelled words, and words that do not belong in the sentence
+
+Write one line per error, exactly in this format:
+"wrong text from the draft" -> "corrected text"
+The wrong text must be copied character by character from the draft: only the words
+that need to change and a few words around them. To remove text entirely, write -> "".
+Output only these lines, no other comment. If you find no errors, answer only: No errors.

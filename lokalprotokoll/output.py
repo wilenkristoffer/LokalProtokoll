@@ -3,6 +3,7 @@
 import json
 import re
 import unicodedata
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import resolve
@@ -33,10 +34,14 @@ def new_meeting_dir(cfg, name, when):
 LABELS = {
     "sv": {"speaker": "Talare", "transcript": "Transkribering", "summary": "Protokoll",
            "date": "Datum", "duration": "L\xe4ngd", "language": "Spr\xe5k",
-           "model": "Modell", "me": "Jag"},
+           "model": "Modell", "me": "Jag", "participants": "Deltagare",
+           "review": "Granska f\xf6re delning",
+           "review_note": "Automatiska kontroller. Ta bort avsnittet innan du delar protokollet."},
     "en": {"speaker": "Speaker", "transcript": "Transcript", "summary": "Minutes",
            "date": "Date", "duration": "Duration", "language": "Language",
-           "model": "Model", "me": "Me"},
+           "model": "Model", "me": "Me", "participants": "Participants",
+           "review": "Check before sharing",
+           "review_note": "Automatic checks. Remove this section before you share the minutes."},
 }
 
 
@@ -71,12 +76,34 @@ def transcript_lines(meeting):
     return lines
 
 
+def participants(meeting):
+    """Speaker names in the order they first speak, each name once."""
+    names = []
+    for seg in meeting["segments"]:
+        name = speaker_name(meeting, seg.get("speaker"))
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _when(meeting):
+    """Start and end time, e.g. 2026-09-29 12:59-13:59, or the date as stored if it has no time."""
+    try:
+        start = datetime.strptime(meeting["date"], "%Y-%m-%d %H:%M")
+    except ValueError:
+        return meeting["date"]
+    return f"{meeting['date']}-{start + timedelta(seconds=meeting['duration_s']):%H:%M}"
+
+
 def _header(meeting, title):
     lab = labels(meeting["language"])
-    return (f"# {title}: {meeting['name']}\n\n"
-            f"- {lab['date']}: {meeting['date']}\n"
-            f"- {lab['duration']}: {fmt_time(meeting['duration_s'])}\n"
-            f"- {lab['language']}: {meeting['language']}\n")
+    text = (f"# {title}: {meeting['name']}\n\n"
+            f"- {lab['date']}: {_when(meeting)}\n"
+            f"- {lab['duration']}: {fmt_time(meeting['duration_s'])}\n")
+    names = participants(meeting)
+    if names:
+        text += f"- {lab['participants']}: {', '.join(names)}\n"
+    return text + f"- {lab['language']}: {meeting['language']}\n"
 
 
 def write_transcript_md(meeting, out_dir):
@@ -90,11 +117,14 @@ def write_transcript_md(meeting, out_dir):
     Path(out_dir, "transcript.md").write_text(text, encoding="utf-8")
 
 
-def write_summary_md(meeting, summary, model, consent_note, out_dir, filename="summary.md"):
+def write_summary_md(meeting, summary, model, consent_note, out_dir, filename="summary.md", review=()):
+    """review: Markdown list lines from summarize.review_notes(), shown after the minutes."""
     lab = labels(meeting["language"])
     text = _header(meeting, lab["summary"])
     text += f"- {lab['model']}: {model}\n\n"
     text += summary.strip() + "\n\n---\n\n"
+    if review:
+        text += f"## {lab['review']}\n\n_{lab['review_note']}_\n\n" + "\n".join(review) + "\n\n---\n\n"
     text += f"_{consent_note}_\n"
     Path(out_dir, filename).write_text(text, encoding="utf-8")
 
