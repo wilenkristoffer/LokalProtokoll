@@ -204,8 +204,9 @@ def process_recording(cfg, args, folder):
     if not info_path.exists():
         raise SystemExit(f"{folder} is not a recording folder (no recording.json)")
     if not (folder / "mic.wav").exists():
-        raise SystemExit(f"{folder} is already processed (the raw audio is gone). "
-                         "Use rediarize or summarize instead.")
+        if not (folder / "meeting.json").exists() or not (folder / "audio_16k.wav").exists():
+            raise SystemExit(f"{folder} has no audio left to process.")
+        return process_again(cfg, args, folder)
     info = json.loads(info_path.read_text(encoding="utf-8"))
     when = datetime.fromisoformat(info["started"])
     ffmpeg = resolve(cfg["paths"]["ffmpeg"])
@@ -228,6 +229,20 @@ def process_recording(cfg, args, folder):
     if cfg["record"].get("delete_raw_audio"):
         for path in raw:
             path.unlink()
+
+
+def process_again(cfg, args, folder):
+    """Process a meeting again from the 16 kHz copies (the full-quality mic.wav and
+    system.wav are deleted after processing), e.g. when the language was wrong:
+    lp.py process <folder> --lang sv. Transcript, speakers and minutes are made
+    anew, so corrections and speaker names given since are lost (your own name stays)."""
+    old = output.load_meeting(folder)
+    meeting = {"name": args.name or old["name"], "auto_name": bool(old.get("auto_name")) and not args.name,
+               "date": old["date"], "source_audio": old.get("source_audio", str(folder.resolve()))}
+    if old.get("track_files"):
+        meeting["track_files"] = old["track_files"]
+    print(f"Processing again from the 16 kHz copies: {folder}")
+    run_pipeline(cfg, args, folder, meeting, Timer())
 
 
 def cmd_record(cfg, args):

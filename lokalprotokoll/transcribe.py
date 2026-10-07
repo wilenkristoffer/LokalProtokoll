@@ -3,10 +3,15 @@
 import json
 import re
 import subprocess
+import tempfile
+import wave
 from pathlib import Path
+
+import numpy as np
 
 from . import audio
 from .config import resolve
+from .output import fmt_time
 
 # Lines from whisper-cli worth showing live. Everything is saved to whisper.log.
 SHOW_PATTERNS = ("progress =", "ggml_vulkan: 0", "ggml_vulkan: Found", "error", "failed",
@@ -40,22 +45,59 @@ def _run_whisper(cmd, log_path=None, show=True):
     return output
 
 
+DETECT_WINDOW_S = 30  # Whisper hears 30 s at a time
+
+
+def detect_windows(wav_path, duration, count):
+    """Start times of up to count 30 s windows with the most sound, one from each
+    part of the meeting. The start of a recording is often silence or small talk
+    ("Hello. Hi, Erik." in a Swedish meeting), so it is not enough on its own."""
+    if duration <= DETECT_WINDOW_S:
+        return [0.0]
+    sound = np.zeros(int(duration) + 1)
+    for start, end in audio.sound_runs(wav_path):
+        sound[int(start):int(end) + 1] = 1
+    part = duration / count
+    windows = []
+    for i in range(count):
+        first, last = i * part, min((i + 1) * part, duration) - DETECT_WINDOW_S
+        starts = np.arange(first, max(first, last) + 1, 5.0)
+        best = max(starts, key=lambda s: sound[int(s):int(s) + DETECT_WINDOW_S].sum())
+        if sound[int(best):int(best) + DETECT_WINDOW_S].sum() >= 10:  # seconds with sound
+            windows.append(float(best))
+    return windows or [0.0]
+
+
 def detect_language(cfg, wav_path, duration):
-    """Return a language code such as "sv" or "en" using the multilingual model."""
+    """Return a language code such as "sv" or "en" using the multilingual model.
+
+    Whisper's own detection only listens to the first 30 s of the file (the -ot
+    offset is ignored with -dl), which is often silence before the meeting starts.
+    So several windows with speech, spread over the meeting, are cut out and each
+    is detected; they vote with Whisper's probability."""
     t = cfg["transcribe"]
     model = resolve(t["model_detect"])
     _check_file(model, "Language detection model")
-    offset = t.get("detect_at_seconds", 30)
-    if duration < offset + 30:
-        offset = 0
-    cmd = [resolve(cfg["paths"]["whisper_cli"]), "-m", model, "-f", str(wav_path),
-           "-l", "auto", "-dl", "-ot", str(int(offset * 1000)), "-t", str(t["threads"])]
-    output = _run_whisper(cmd, show=False)
-    m = re.search(r"auto-detected language:\s*([a-z]+)", output)
-    if not m:
+    votes = {}
+    with tempfile.TemporaryDirectory(prefix="lp_detect_") as tmp, wave.open(str(wav_path), "rb") as src:
+        rate = src.getframerate()
+        for start in detect_windows(wav_path, duration, t.get("detect_windows", 5)):
+            clip = Path(tmp) / f"{int(start)}.wav"
+            src.setpos(int(start * rate))
+            with wave.open(str(clip), "wb") as out:
+                out.setparams(src.getparams())
+                out.writeframes(src.readframes(DETECT_WINDOW_S * rate))
+            cmd = [resolve(cfg["paths"]["whisper_cli"]), "-m", model, "-f", str(clip),
+                   "-l", "auto", "-dl", "-t", str(t["threads"])]
+            m = re.search(r"auto-detected language:\s*([a-z]+)\s*\(p = ([\d.]+)\)", _run_whisper(cmd, show=False))
+            if m:
+                votes[m.group(1)] = votes.get(m.group(1), 0.0) + float(m.group(2))
+                print(f"    {fmt_time(start)}: {m.group(1)} ({float(m.group(2)):.0%})")
+    if not votes:
         print("    Could not detect language, using sv")
         return "sv"
-    return m.group(1)
+    return max(votes, key=votes.get)
+
 
 
 def transcribe(cfg, wav_path, out_dir, language, name="whisper", separate_track=False):

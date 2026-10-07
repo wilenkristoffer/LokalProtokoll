@@ -292,7 +292,15 @@ python lp.py rediarize meetings\2026-09-26_1400_Styrelsemote --speakers 3 --summ
 
 # Redo only the summary, for example after editing a prompt:
 python lp.py summarize meetings\2026-09-26_1400_Styrelsemote --llm qwen3:14b
+
+# Wrong language? Process the whole recording again (from the 16 kHz copies that are kept).
+# Transcript, speakers and minutes are made anew: speaker names and corrections are lost.
+python lp.py process meetings\2026-09-26_1400_Styrelsemote --lang sv
 ```
+
+The language is detected from five 30-second windows with speech, spread over the meeting, which vote
+(`transcribe.detect_windows`). Before 2026-10-07 only the first 30 seconds were used, and a meeting that
+started with silence or "Hello, hi" could be transcribed as English.
 
 ### Comparing summary models
 

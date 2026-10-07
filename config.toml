@@ -18,8 +18,10 @@ threads = 6
 model_sv = "models/whisper/kb-whisper-large-q5_0.bin"
 model_en = "models/whisper/ggml-large-v3-turbo-q5_0.bin"
 model_detect = "models/whisper/ggml-large-v3-turbo-q5_0.bin"
-# Detect language from a 30 s window starting here (skips silence at the start).
-detect_at_seconds = 30
+# Detect the language in this many 30 s windows with speech, spread over the meeting;
+# they vote. (One window at the start was often silence or "Hello, hi" and gave English
+# for Swedish meetings.)
+detect_windows = 5
 # Voice activity detection: skips silence, which reduces Whisper hallucinations.
 use_vad = true
 vad_model = "models/whisper/ggml-silero-v6.2.0.bin"
