@@ -50,6 +50,17 @@ threads = 6
 # least this much, 0-1) is moved there. Catches quick replies that were merged with
 # the previous speaker. 0 = off. 0.2 improved every test recording.
 refine_margin = 0.2
+# Same voice check, only with "Auto" (a number you give is kept). Automatic counting
+# split 4-person meetings into 7-22 "speakers": one person in two, plus coughs,
+# laughs and crosstalk as speakers of their own.
+# - Speakers whose average voices are at least this similar (0-1) are joined. Two
+#   different people measured at most 0.44 alike, one person split in two 0.73-0.82.
+#   0 = off.
+merge_similar = 0.6
+# - A "speaker" with less than this many seconds of speech in the whole meeting is
+#   given to the speaker each of their turns sounds most like. Someone who really says
+#   only "hi" and "bye" is then merged too; fix that in the transcript ("Who said this?").
+min_speaker_s = 8
 segmentation_model = "models/diarization/sherpa-onnx-pyannote-segmentation-3-0/model.onnx"
 # Voice model. TitaNet small separated speakers best in the benchmark (docs/MODELS.md).
 embedding_model = "models/diarization/nemo_en_titanet_small.onnx"

@@ -197,6 +197,20 @@ Two things matter more than the voice model:
   were merged into one speaker cannot be split without processing again. Your one-person screen recording
   gave 1 speaker at 1.0 (14 with the first voice model). With the number of speakers given, the same
   recordings reach cpWER 24.7%, 38.8% and 23.5%.
+- **Same voice check (after "Auto", added 2026-10-07).** Real online meetings with 2-4 other people still got
+  7-22 speakers at 1.0. Almost all extra speakers had a few seconds of speech (coughs, laughs, crosstalk),
+  and some people were split in two. Comparing the speakers' average voices (TitaNet, cosine): two different
+  people were at most 0.44 alike (benchmarks and real meetings), one person split in two 0.73-0.82. So after
+  clustering, speakers at least 0.6 alike are joined (`diarize.merge_similar`), and the turns of speakers with
+  less than 8 s of speech in total go to the speaker they sound most like (`diarize.min_speaker_s`):
+
+  | Auto, threshold 1.0 | Speakers found (real: 4, 4, 4) | cpWER (AMI ES2004a, IS1009a, Riksdag) |
+  |---|---|---|
+  | Before | 9, 12, 4 | 27%, 36%, 24% |
+  | **With the same voice check** | **4, 4, 4** | **24%, 29%, 24%** |
+
+  Ten real meetings went from 4-22 speakers to 2-5; in the meeting where one person left after a minute, that
+  person is still found. Merging alone (min 0 s) or absorbing alone (no merging) both left too many speakers.
 
 ### VAD settings
 

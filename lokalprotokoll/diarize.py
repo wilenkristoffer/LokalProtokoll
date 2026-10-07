@@ -69,13 +69,29 @@ def _sherpa(d, wav_path, num_speakers):
     print()
     turns = [{"start": r.start, "end": r.end, "speaker": str(r.speaker)} for r in result]
     margin = d.get("refine_margin", 0.2)
-    if margin > 0:
+    # Only after automatic counting: a number given by the user is kept as it is.
+    cleanup = num_speakers <= 0 and d.get("merge_similar", 0) > 0
+    if margin > 0 or cleanup:
         extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
             sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=emb_model, num_threads=threads))
-        turns, moved = refine_turns(turns, audio, extractor, margin)
-        if moved:
-            print(f"    Voice check: moved {moved} turns to a speaker they sound more like")
+        embeddings = [_embed(extractor, audio, t["start"], t["end"]) if t["end"] - t["start"] >= MIN_EMBED_S
+                      else None for t in turns]
+        if margin > 0:
+            turns, moved = refine_turns(turns, embeddings, margin)
+            if moved:
+                print(f"    Voice check: moved {moved} turns to a speaker they sound more like")
+        if cleanup:
+            before = len({t["speaker"] for t in turns})
+            turns = merge_same_voices(turns, embeddings, d["merge_similar"])
+            turns = absorb_small_speakers(turns, embeddings, d.get("min_speaker_s", 8.0))
+            after = len({t["speaker"] for t in turns})
+            if after < before:
+                print(f"    Same voice check: {before} speakers -> {after}")
     return turns
+
+
+# Turns shorter than this get no voice fingerprint (too little sound to say anything).
+MIN_EMBED_S = 0.5
 
 
 def _embed(extractor, audio, start, end, longest_s=20.0):
@@ -91,17 +107,17 @@ def _embed(extractor, audio, start, end, longest_s=20.0):
     return e / (np.linalg.norm(e) or 1.0)
 
 
-def refine_turns(turns, audio, extractor, margin, min_s=0.8, rounds=2):
+def refine_turns(turns, embeddings, margin, min_s=0.8, rounds=2):
     """Check every voice turn against the average voice of each speaker and move it
     if it sounds clearly more like another speaker (by at least margin).
+    embeddings: the voice fingerprint of each turn, or None.
 
     The segmentation step sometimes treats a quick reply by someone else as the
     same voice ("Yeah, I only have one eye." / "Oh, my God, I'm sorry." / "Me
     too."), and then the reply never gets its own fingerprint. Checking each turn
     on its own catches that. Turns shorter than min_s are too short to judge."""
     turns = [dict(t) for t in turns]
-    embeddings = [_embed(extractor, audio, t["start"], t["end"]) if t["end"] - t["start"] >= min_s else None
-                  for t in turns]
+    embeddings = [e if t["end"] - t["start"] >= min_s else None for t, e in zip(turns, embeddings)]
     totals, counts = {}, {}
     for t, e in zip(turns, embeddings):
         if e is not None:
@@ -131,3 +147,64 @@ def refine_turns(turns, audio, extractor, margin, min_s=0.8, rounds=2):
                 moved += 1
     return turns, moved
 
+
+
+def _voices(turns, embeddings):
+    """Each speaker's average voice (normalized, weighted by turn length; None if
+    no turn has a fingerprint) and total speaking time."""
+    totals, seconds = {}, {}
+    for t, e in zip(turns, embeddings):
+        length = t["end"] - t["start"]
+        seconds[t["speaker"]] = seconds.get(t["speaker"], 0.0) + length
+        if e is not None:
+            totals[t["speaker"]] = totals.get(t["speaker"], 0) + length * e
+    voices = {}
+    for speaker in seconds:
+        norm = np.linalg.norm(totals.get(speaker, 0))
+        voices[speaker] = totals[speaker] / norm if norm else None
+    return voices, seconds
+
+
+def merge_same_voices(turns, embeddings, min_similarity):
+    """Join speakers whose average voices are this similar (cosine, 0-1): the
+    clustering often splits one person in two, e.g. when they sound different
+    over a bad connection. Always joins the most similar pair first.
+
+    On the test recordings and real online meetings, two different people were
+    at most 0.44 alike, and one person split in two 0.73-0.82."""
+    turns = [dict(t) for t in turns]
+    while True:
+        voices, seconds = _voices(turns, embeddings)
+        speakers = [s for s, v in voices.items() if v is not None]
+        pairs = [(float(voices[a] @ voices[b]), a, b) for i, a in enumerate(speakers) for b in speakers[i + 1:]]
+        similarity, a, b = max(pairs, default=(-1.0, None, None))
+        if similarity < min_similarity:
+            return turns
+        keep, gone = (a, b) if seconds[a] >= seconds[b] else (b, a)
+        for t in turns:
+            if t["speaker"] == gone:
+                t["speaker"] = keep
+
+
+def absorb_small_speakers(turns, embeddings, min_seconds):
+    """A "speaker" who talks less than min_seconds in the whole meeting is almost
+    always a piece of someone else: a cough, a laugh, two people talking at once.
+    A few seconds of sound give no reliable voice, so automatic counting makes
+    many of those. Each of their turns goes to the speaker it sounds most like
+    (or, with no fingerprint, the speaker of the nearest turn in time)."""
+    voices, seconds = _voices(turns, embeddings)
+    real = [s for s in seconds if seconds[s] >= min_seconds and voices[s] is not None]
+    if not real or min_seconds <= 0:
+        return turns
+    turns = [dict(t) for t in turns]
+    small = [i for i, t in enumerate(turns) if t["speaker"] not in real]
+    for i in small:
+        if embeddings[i] is not None:
+            turns[i]["speaker"] = max(real, key=lambda s: float(embeddings[i] @ voices[s]))
+    kept = [t for t in turns if t["speaker"] in real]
+    for i in small:
+        t = turns[i]
+        if t["speaker"] not in real:
+            middle = (t["start"] + t["end"]) / 2
+            t["speaker"] = min(kept, key=lambda k: abs((k["start"] + k["end"]) / 2 - middle))["speaker"]
+    return turns
