@@ -216,7 +216,9 @@ def verify(cfg, meeting, model, draft, source):
     text, applied = draft, 0
     # One correction per line, each side up to its last quote: the minutes quote names
     # ("Oil price"), and a lazy match would cut the right side at the first inner quote.
-    pairs = re.findall(r'(?m)^[^"\n]*"(.+)"\s*->\s*"(.*)"[^"\n]*$', answer)
+    # The line must end at that quote. The model sometimes comments after a correction
+    # ("X" -> "X" (Note: ... "testare" ...)), and the comment then ended up in the minutes.
+    pairs = re.findall(r'(?m)^[^"\n]*"(.+)"\s*->\s*"(.*)"[ \t.,]*$', answer)
     for wrong, right in dict.fromkeys(pairs):
         # Never touch the headings, and never replace text with itself.
         if wrong == right or wrong.startswith("#") or wrong not in text:
