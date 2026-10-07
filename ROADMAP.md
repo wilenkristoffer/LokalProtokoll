@@ -25,8 +25,9 @@
 - **Voice recognition on real meetings**: check the recognition limits (docs/MODELS.md) with voices saved
   on one day and recognized on another, with different microphones.
 
-- **Benchmark on other hardware**: the numbers in docs/MODELS.md are from one computer (RX 7800 XT). Not
-  measured yet: GPUs with 4-8 GB, CPU-only speed for KB-Whisper small/medium.
+- **Test on a real laptop**: the device profiles (laptop, small, cpu) were measured on a desktop, with the
+  processor or smaller models standing in for laptop hardware. Still to check on real laptops: an NVIDIA
+  laptop GPU with 6-8 GB, Intel Arc, integrated graphics only, and running on battery.
 - **Automatic speaker count**: still off by a few speakers on long meetings (threshold 1.0). Could use a
   different clustering method; measure with `tests/tune_threshold.py`.
 

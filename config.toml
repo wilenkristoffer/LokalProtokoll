@@ -2,6 +2,18 @@
 # Relative paths are relative to the folder this file is in.
 # Command line flags (see: python lp.py process --help) override these values.
 
+[device]
+# Which models fit this computer (lokalprotokoll/hardware.py, docs/MODELS.md):
+#   "auto"    = chosen from the graphics card (the default)
+#   "desktop" = graphics card with 12 GB or more: the largest models
+#   "laptop"  = graphics card with 8-12 GB: a smaller summary model
+#   "small"   = graphics card with 4-8 GB: an even smaller summary model
+#   "cpu"     = no usable graphics card: small models that run on the processor
+#   "custom"  = use the model settings below exactly as written
+# Any profile but "custom" replaces transcribe.model_sv / model_en / model_detect and
+# summarize.model / num_ctx below. Set it under Profile in the app.
+profile = "auto"
+
 [paths]
 meetings_dir = "meetings"
 # Saved voices (lp.py remember / "Remember voice" in the app). Biometric personal data:

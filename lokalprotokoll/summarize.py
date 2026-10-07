@@ -58,6 +58,8 @@ def chat(cfg, model, prompt, temperature=None, max_tokens=None):
     }
     if max_tokens:
         body["options"]["num_predict"] = max_tokens
+    if s.get("num_gpu") is not None:  # layers on the GPU; 0 = run on the processor only
+        body["options"]["num_gpu"] = s["num_gpu"]
     if s.get("disable_thinking"):
         body["think"] = False
     url = s["ollama_url"] + "/api/chat"

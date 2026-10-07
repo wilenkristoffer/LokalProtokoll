@@ -7,7 +7,7 @@ runs on your own PC: no cloud, no time limits.
 
 ```
 audio file -> ffmpeg (16 kHz mono wav)
-           -> whisper.cpp + Vulkan (KB-Whisper for Swedish, Whisper turbo for English)
+           -> whisper.cpp (KB-Whisper for Swedish, Whisper for English), on the GPU with Vulkan or on the CPU
            -> sherpa-onnx speaker diarization (TitaNet voice model)
            -> merge speakers with text by timestamp
            -> Ollama (local LLM) -> minutes -> check against the transcript -> summary.md
@@ -22,19 +22,58 @@ share (health, security, personal, internal numbers) with a suggested rewording.
 that section before you share the minutes. Turn the steps off with `verify` and
 `sensitivity_check` in `config.toml`. Together they add about 45 s for a 1 hour meeting.
 
-## Setup on a clean Windows machine
+## Requirements
+
+| | Minimum | Recommended |
+|---|---|---|
+| System | Windows 10 version 2004 or newer, 64-bit | Windows 11 |
+| Memory (RAM) | 8 GB (with a graphics card), 16 GB without one | 16 GB or more |
+| Graphics card | none: everything can run on the processor, slowly | 8 GB or more of its own memory (VRAM) |
+| Processor | 4 cores | 6 cores or more |
+| Disk | about 6 GB for the programs and models | plus about 0.35 GB per hour of recorded meetings |
+| Sound | a microphone; for online meetings the other side is recorded from the PC's own sound | a headset |
+
+Linux and macOS are not supported yet (recording uses Windows' WASAPI loopback).
+
+### Which models run on which computer
+
+LokalProtokoll picks its models from the graphics card (**device profile**, `[device]` in `config.toml`, or
+**Profile** in the app). The biggest need is the summary model, which must fit in the card's own memory together
+with Windows (1-2 GB). The numbers below were measured (see [docs/MODELS.md](docs/MODELS.md)):
+
+| Device profile | Graphics card | Speech to text | Summary model (VRAM it needs) | Processing time per meeting hour |
+|---|---|---|---|---|
+| **Desktop GPU** | 12 GB VRAM or more | KB-Whisper large / Whisper turbo | gemma4:12b (9.2 GB) | about 12 min (measured, RX 7800 XT) |
+| **Laptop GPU** | 8-12 GB | the same | gemma4:e4b (5.6 GB) | similar, depending on the card (not measured on a laptop yet) |
+| **Small GPU** | 4-8 GB | the same (it needs 1.8 GB) | gemma4:e2b (3.9 GB) | similar, depending on the card (not measured on a laptop yet) |
+| **No GPU** | none, or only integrated graphics | KB-Whisper small / Whisper small | gemma4:e4b on the processor | about 40 min on a 6-core desktop processor (a 20-minute meeting took 13 min); laptop processors are slower |
+
+- NVIDIA, AMD and Intel graphics cards all work, with a current driver. Speech to text uses whisper.cpp with
+  Vulkan, which all three support. The summary uses Ollama: CUDA on NVIDIA (driver 550 or newer), ROCm on recent
+  AMD cards and Vulkan on the others; see [Ollama's GPU page](https://docs.ollama.com/gpu).
+- Integrated graphics (Intel Iris/UHD, AMD Radeon in a laptop processor) share the main memory and are treated as
+  "No GPU".
+- Recording itself is light (half a percent of the CPU), so a meeting is never slowed down. The heavy work is
+  the processing after the meeting, and it runs in a queue: you can record the next meeting meanwhile.
+- Speaker detection always runs on the processor (about 4 minutes per meeting hour on 6 cores).
+
+## Setup
 
 **The quick way:** run the installer from the project folder. It installs what is missing (Python, ffmpeg, Ollama,
-the build tools and Vulkan SDK for whisper.cpp, the models) and skips what is already there, so it is safe to run
-again:
+the build tools and Vulkan SDK for whisper.cpp), detects the graphics card, downloads the models of the matching
+device profile, and skips what is already there, so it is safe to run again:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-Without a usable GPU, or to skip building whisper.cpp, use `setup.ps1 -CpuOnly` (a ready-made, slower CPU version).
-The steps below are what the installer does, if you want to do them by hand.
+Without a graphics card, or to skip building whisper.cpp, use `setup.ps1 -CpuOnly`: a ready-made CPU version of
+whisper.cpp, and the "No GPU" device profile.
 
+Changing the device profile later (in the app, or `[device] profile` in `config.toml`) may need other models. The
+app offers to download them; from the command line: `python lp.py models`.
+
+The steps below are what the installer does, if you want to do them by hand.
 Run all commands in PowerShell from the project folder.
 
 ### 1. Python 3.11 or newer
@@ -58,9 +97,10 @@ winget install Gyan.FFmpeg
 
 Open a new PowerShell window afterwards and check that `ffmpeg -version` works.
 
-### 3. whisper.cpp with Vulkan (AMD GPU)
+### 3. whisper.cpp with Vulkan (any graphics card)
 
-There is no prebuilt Windows Vulkan binary, so you build it yourself (it takes about 5-10 minutes).
+There is no prebuilt Windows Vulkan binary, so you build it yourself (it takes about 5-10 minutes). Without a
+graphics card, use the ready-made CPU version instead (`setup.ps1 -CpuOnly` downloads it).
 You need:
 
 - Git: `winget install Git.Git`
@@ -76,35 +116,37 @@ powershell -ExecutionPolicy Bypass -File scripts\build_whispercpp.ps1
 
 This produces `tools\whisper.cpp\build\bin\Release\whisper-cli.exe`, which is the path set in `config.toml`.
 When you transcribe, the output should include a line like
-`ggml_vulkan: 0 = AMD Radeon RX 7800 XT`. If that line is missing, Whisper is running on the CPU.
+`ggml_vulkan: 0 = <your graphics card>`. If that line is missing, Whisper is running on the CPU.
 
 ### 4. Models
 
 ```powershell
-python setup_models.py
+python setup_models.py                  # the models of this computer's device profile
+python setup_models.py --profile cpu    # or of another profile: desktop, laptop, small, cpu
 ```
 
-This downloads about 1.7 GB into `models\`:
+With a graphics card this downloads about 1.7 GB into `models\` (about 0.5 GB for the "No GPU" profile):
 
 | File | What it is |
 |---|---|
-| `kb-whisper-large-q5_0.bin` | KB-Whisper large (KBLab), for Swedish speech |
-| `ggml-large-v3-turbo-q5_0.bin` | OpenAI Whisper turbo, for English and language detection |
+| `kb-whisper-large-q5_0.bin` | KB-Whisper large (KBLab), for Swedish speech (`kb-whisper-small` without a GPU) |
+| `ggml-large-v3-turbo-q5_0.bin` | OpenAI Whisper turbo, for English and language detection (`ggml-small` without a GPU) |
 | `ggml-silero-v6.2.0.bin` | Voice activity detection (skips silence) |
-| `sherpa-onnx-pyannote-segmentation-3-0/` and `3dspeaker_..._16k.onnx` | Speaker diarization |
+| `sherpa-onnx-pyannote-segmentation-3-0/` and `nemo_en_titanet_small.onnx` | Speaker diarization |
 
-To try a smaller or more verbatim Swedish model:
-`python setup_models.py --kb-size medium` or `--kb-variant strict`.
-The script then prints the line to change in `config.toml`.
+To try another Swedish model size: `python setup_models.py --kb-size medium`. The script then prints the lines
+to change in `config.toml` (set `[device] profile = "custom"` so your choice is kept).
 
 ### 5. Ollama
 
-Install it from https://ollama.com/download. The RX 7800 XT is supported on Windows (ROCm, with Vulkan as a fallback).
-Keep your Adrenalin driver up to date. Then pull a model:
+Install it from https://ollama.com/download and keep your graphics driver up to date. Then download the summary
+model of your device profile (`gemma4:12b`, `gemma4:e4b` or `gemma4:e2b`, see the table above), for example:
 
 ```powershell
 ollama pull gemma4:12b
 ```
+
+`python lp.py models` downloads the speech models and the summary model of the device profile in one go.
 
 ## The app
 
@@ -122,8 +164,11 @@ Top right:
 - **Profile** (the person icon): your name, shown as "Anna (Me)" for the microphone track, and the language
   of the minutes: **Same as the meeting** (the default: Swedish meetings get Swedish minutes), **Svenska** or
   **English**. With a fixed language, a Swedish meeting can get English minutes and the other way around; the
-  transcript stays in the language that was spoken. Saved as `my_name` and `summarize.language` in
-  `config.toml`, and used from the next meeting that is processed (or **Rewrite minutes** for an earlier one).
+  transcript stays in the language that was spoken. And **This computer**: the device profile (Auto, Desktop GPU,
+  Laptop GPU, Small GPU, No GPU; see Requirements), with the detected graphics card shown. If a profile needs
+  models that are not downloaded, the app offers to download them. Saved as `my_name`, `summarize.language`
+  and `device.profile` in `config.toml`, and used from the next meeting that is processed (or **Rewrite
+  minutes** for an earlier one).
 
 - **Hidden** (on by default): the window is excluded from screen sharing and screenshots. You see it; Teams, Zoom
   and screenshots do not. Click it to switch to "Visible". This needs Windows 10 version 2004 or newer.
@@ -367,3 +412,8 @@ To check a single meeting against your own reference transcript: `python lp.py e
 
 Tell everyone in the meeting that you are recording, and why. Under GDPR, you are responsible for this. `summary.md` ends
 with a consent line you can fill in; the text is set in `config.toml` under `[prompts]`.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The models are downloaded separately and have their own licenses (KB-Whisper and
+Whisper: see their model cards; Gemma: the Gemma terms of use; sherpa-onnx models: see docs/MODELS.md).

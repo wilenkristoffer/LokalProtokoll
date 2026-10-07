@@ -7,13 +7,19 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = PROJECT_DIR / "config.toml"
 
 
-def load_config(path=None):
+def load_config(path=None, profile=True):
+    """config.toml, with the models of the device profile filled in (hardware.py)
+    unless device.profile is "custom" or profile=False."""
     path = Path(path) if path else DEFAULT_CONFIG
     try:
         with open(path, "rb") as f:
-            return tomllib.load(f)
+            cfg = tomllib.load(f)
     except UnicodeDecodeError:
         raise SystemExit(f"{path} is not valid UTF-8. Save it as UTF-8 and try again.")
+    if profile:
+        from .hardware import apply_profile
+        apply_profile(cfg)
+    return cfg
 
 
 def resolve(path_str):

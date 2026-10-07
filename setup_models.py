@@ -1,6 +1,7 @@
 """Download the models LokalProtokoll needs into models/.
 
-  python setup_models.py                      # KB-Whisper large q5_0 + the rest
+  python setup_models.py                      # the models for this computer (device profile)
+  python setup_models.py --profile cpu        # the models for another profile (desktop, laptop, small, cpu)
   python setup_models.py --kb-size medium     # also try a smaller KB-Whisper
   python setup_models.py --kb-variant strict  # more verbatim transcripts
 
@@ -59,9 +60,26 @@ def kb_whisper(size, quant, variant):
     return dest
 
 
+def whisper_file(path):
+    """Download a Whisper model named in config.toml or a device profile, from its
+    file name: kb-whisper-<size>-q5_0.bin (KBLab) or ggml-<name>.bin (whisper.cpp)."""
+    name = Path(path).name
+    if name.startswith("kb-whisper-"):
+        size = name[len("kb-whisper-"):].split("-")[0].removesuffix(".bin")
+        return kb_whisper(size, "q5_0" if name.endswith("-q5_0.bin") else "full",
+                          "strict" if "-strict" in name else "standard")
+    if name.startswith("ggml-"):
+        return download(f"{HF}/ggerganov/whisper.cpp/resolve/main/{name}", WHISPER_DIR / name)
+    raise SystemExit(f"Do not know where to download {name}; put it in models/whisper yourself.")
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--kb-size", default="large", choices=["tiny", "base", "small", "medium", "large"])
+    parser.add_argument("--profile", choices=["auto", "desktop", "laptop", "small", "cpu"],
+                        help="Download the speech models of this device profile (default: device.profile in "
+                             "config.toml; auto = chosen from this computer's graphics card)")
+    parser.add_argument("--kb-size", choices=["tiny", "base", "small", "medium", "large"],
+                        help="Download this KB-Whisper size instead of the profile's")
     parser.add_argument("--kb-quant", default="q5_0", choices=["q5_0", "full"])
     # Note: for "large", the whisper.cpp file of the "strict" variant is identical to "standard".
     parser.add_argument("--kb-variant", default="standard", choices=["standard", "strict"])
@@ -69,12 +87,28 @@ def main():
                         help="Also download the alternative models used in tests/variants.toml (about 1.9 GB)")
     args = parser.parse_args()
 
-    print("Swedish speech model (KB-Whisper):")
-    kb = kb_whisper(args.kb_size, args.kb_quant, args.kb_variant)
+    sys.path.insert(0, str(ROOT))
+    from lokalprotokoll import hardware
+    from lokalprotokoll.config import load_config
 
-    print("English + language detection model (Whisper large-v3-turbo):")
-    download(f"{HF}/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
-             WHISPER_DIR / "ggml-large-v3-turbo-q5_0.bin")
+    cfg = load_config(profile=False)
+    if args.profile:
+        cfg.setdefault("device", {})["profile"] = args.profile
+    info = hardware.detect()
+    profile = hardware.apply_profile(cfg, info)
+    print(f"This computer: {hardware.describe(info)}")
+    print(f"Device profile: {hardware.PROFILES[profile]['label'] if profile else 'custom (config.toml)'}\n")
+    t = cfg["transcribe"]
+
+    print("Swedish speech model (KB-Whisper):")
+    if args.kb_size:
+        kb = kb_whisper(args.kb_size, args.kb_quant, args.kb_variant)
+    else:
+        kb = whisper_file(t["model_sv"])
+
+    print("English + language detection model (Whisper):")
+    for path in dict.fromkeys((t["model_en"], t["model_detect"])):
+        whisper_file(path)
 
     print("Voice activity detection (Silero):")
     download(f"{HF}/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin",
@@ -103,9 +137,9 @@ def main():
                      "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"):
             download(f"{SHERPA}/speaker-recongition-models/{name}", DIAR_DIR / name)
 
-    default = WHISPER_DIR / "kb-whisper-large-q5_0.bin"
-    if kb != default:
-        print(f"\nTo use {kb.name}, set in config.toml:\n  model_sv = \"models/whisper/{kb.name}\"")
+    if args.kb_size and kb.name != Path(t["model_sv"]).name:
+        print(f"\nTo use {kb.name}, set in config.toml:\n  [device] profile = \"custom\"\n"
+              f"  model_sv = \"models/whisper/{kb.name}\"")
     print("\nDone.")
 
 

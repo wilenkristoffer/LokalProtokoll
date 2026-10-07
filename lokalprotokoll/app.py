@@ -571,12 +571,27 @@ class PromptPopup(PopupMenu):
 MINUTES_LANGUAGES = {"auto": "Same as the meeting", "sv": "Svenska", "en": "English"}
 
 
+DEVICE_CHOICES = {"auto": "Auto", "desktop": "Desktop GPU", "laptop": "Laptop GPU", "small": "Small GPU",
+                  "cpu": "No GPU"}
+
+
 class ProfilePopup(PromptPopup):
-    """Your name and the language of the minutes.
-    items: (name, language "auto"/"sv"/"en", on_save(name, language))."""
+    """Your name, the language of the minutes and the device profile.
+    items: (name, language "auto"/"sv"/"en", device "auto"/"desktop"/"laptop"/"cpu"/"custom",
+    hardware.detect() result, on_save(name, language, device))."""
+
+    def _segments(self, frame, values, current):
+        choice = ctk.CTkSegmentedButton(frame, values=values, font=self.app.f_small, height=28, selected_color=INK,
+                                        selected_hover_color=INK_HOVER, unselected_color=BG,
+                                        unselected_hover_color=LINE, fg_color=BG,
+                                        command=lambda v: restyle_segments(choice))
+        choice.set(current)
+        restyle_segments(choice)
+        return choice
 
     def _fill(self, frame, items):
-        name, language, on_save = items
+        from .hardware import PROFILES, describe
+        name, language, device, info, on_save = items
         ctk.CTkLabel(frame, text="Profile", font=self.app.f_bold, text_color=INK).pack(anchor="w", padx=14, pady=(12, 6))
         ctk.CTkLabel(frame, text="Your name (shown as \"Name (Me)\" in recordings)", font=self.app.f_small,
                      text_color=MUTED).pack(anchor="w", padx=14)
@@ -586,17 +601,26 @@ class ProfilePopup(PromptPopup):
         entry.pack(fill="x", padx=12, pady=(0, 10))
         ctk.CTkLabel(frame, text="Write the minutes in", font=self.app.f_small,
                      text_color=MUTED).pack(anchor="w", padx=14)
-        choice = ctk.CTkSegmentedButton(frame, values=list(MINUTES_LANGUAGES.values()), font=self.app.f_small,
-                                        height=28, selected_color=INK, selected_hover_color=INK_HOVER,
-                                        unselected_color=BG, unselected_hover_color=LINE, fg_color=BG,
-                                        command=lambda v: restyle_segments(choice))
-        choice.set(MINUTES_LANGUAGES.get(language, MINUTES_LANGUAGES["auto"]))
-        restyle_segments(choice)
-        choice.pack(fill="x", padx=12, pady=(0, 12))
+        choice = self._segments(frame, list(MINUTES_LANGUAGES.values()),
+                                MINUTES_LANGUAGES.get(language, MINUTES_LANGUAGES["auto"]))
+        choice.pack(fill="x", padx=12, pady=(0, 10))
+
+        # Which models fit this computer. "custom" (set by hand in config.toml) is kept
+        # unless another choice is clicked.
+        ctk.CTkLabel(frame, text="This computer", font=self.app.f_small, text_color=MUTED).pack(anchor="w", padx=14)
+        devices = self._segments(frame, list(DEVICE_CHOICES.values()), DEVICE_CHOICES.get(device, ""))
+        devices.pack(fill="x", padx=12, pady=(0, 2))
+        suggested = PROFILES[info["profile"]]["label"]
+        note = f"{describe(info)}.\nAuto uses: {suggested}."
+        if device == "custom":
+            note += "\nNow: custom models from config.toml."
+        ctk.CTkLabel(frame, text=note, font=self.app.f_small, text_color=MUTED, justify="left",
+                     wraplength=370).pack(anchor="w", padx=14, pady=(0, 12))
 
         def save():
             picked = next(k for k, v in MINUTES_LANGUAGES.items() if v == choice.get())
-            self._choose(lambda: on_save(entry.get().strip(), picked))
+            device_picked = next((k for k, v in DEVICE_CHOICES.items() if v == devices.get()), device)
+            self._choose(lambda: on_save(entry.get().strip(), picked, device_picked))
         entry.bind("<Return>", lambda e: save())
         entry.bind("<Escape>", lambda e: self.destroy())
         buttons = ctk.CTkFrame(frame, fg_color="transparent")
@@ -850,6 +874,8 @@ class App(ctk.CTk):
         self.bind("<Shift-F3>", lambda e: self.viewer.find_step(-1) if self.viewer.find_open else None)
         self.bind("<Escape>", lambda e: self.close_viewer() if self.viewer_open else None)
         self.after(200, self.apply_window_flags)
+        # First start, or a computer the models were not downloaded for.
+        self.after(1500, self._offer_model_download)
         self.refresh_list()
         self.tick()
 
@@ -1228,21 +1254,24 @@ class App(ctk.CTk):
         "Jag": shown as "Anna (Me)". And the language of the minutes. Saved as
         record.my_name and summarize.language in config.toml; processing reads
         config.toml for every job, so the next one uses them."""
-        from . import edit
-        from .config import save_string
+        from . import edit, hardware
+        from .config import load_config, save_string
 
-        def save(name, language):
+        def save(name, language, device):
             previous = self.cfg["record"].get("my_name", "")
             try:
                 if language != self.cfg["summarize"].get("language", "auto"):
                     save_string("summarize", "language", language, self.config_path)
-                    self.cfg["summarize"]["language"] = language
                 if name != previous:
                     save_string("record", "my_name", name, self.config_path)
-                    self.cfg["record"]["my_name"] = name
+                if device != self.cfg.get("device", {}).get("profile", "auto"):
+                    save_string("device", "profile", device, self.config_path)
             except (KeyError, OSError) as e:
                 messagebox.showerror("Profile", f"Could not save the profile in config.toml:\n{e}", parent=self)
                 return
+            self.cfg = load_config(self.config_path)  # with the models of the (new) device profile
+            self.rec.cfg = self.cfg
+            self._offer_model_download()
             if name == previous:
                 return
             past = [f for f in edit.meetings_without_my_name(self.cfg, previous) if not self.jobs.has(f)]
@@ -1259,8 +1288,19 @@ class App(ctk.CTk):
             self.refresh_list()
             if self.viewer_open and self.viewer.folder in past:
                 self.viewer.reload(keep_scroll=True)
-        ProfilePopup(self, (self.cfg["record"].get("my_name", ""), self.cfg["summarize"].get("language", "auto"), save),
+        ProfilePopup(self, (self.cfg["record"].get("my_name", ""), self.cfg["summarize"].get("language", "auto"),
+                            self.cfg.get("device", {}).get("profile", "auto"), hardware.detect(), save),
                      *self._popup_at(widget))
+
+    def _offer_model_download(self):
+        """If the device profile needs models that are not downloaded, offer to
+        download them (a job in the processing queue: lp.py models)."""
+        from .hardware import missing_models
+        missing = missing_models(self.cfg)
+        if missing and not any(j["args"][:1] == ["models"] for j in self.jobs.waiting) and messagebox.askyesno(
+                "Models", "This device profile uses models that are not downloaded yet:\n\n  " + "\n  ".join(missing)
+                + "\n\nDownload them now? (In the processing queue; it can take a while.)", parent=self):
+            self.jobs.add(["models"], "Download models")
 
     def redo_speakers(self, item, widget):
         folder = item["folder"]

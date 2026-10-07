@@ -194,7 +194,7 @@ Two things matter more than the voice model:
 
   (AMI ES2004a, AMI IS1009a, Riksdag.) 1.1 scored best, but 1.2 already merges people, so 1.0 keeps a margin.
   Too many speakers can be fixed afterwards: give two of them the same name when naming speakers. People who
-  were merged into one speaker cannot be split without processing again. Your one-person screen recording
+  were merged into one speaker cannot be split without processing again. A one-person screen recording
   gave 1 speaker at 1.0 (14 with the first voice model). With the number of speakers given, the same
   recordings reach cpWER 24.7%, 38.8% and 23.5%.
 - **Same voice check (after "Auto", added 2026-10-07).** Real online meetings with 2-4 other people still got
@@ -209,7 +209,7 @@ Two things matter more than the voice model:
   | Before | 9, 12, 4 | 27%, 36%, 24% |
   | **With the same voice check** | **4, 4, 4** | **24%, 29%, 24%** |
 
-  Ten real meetings went from 4-22 speakers to 2-5; in the meeting where one person left after a minute, that
+  Ten real online meetings went from 4-22 speakers to 2-5; in the meeting where one person left after a minute, that
   person is still found. Merging alone (min 0 s) or absorbing alone (no merging) both left too many speakers.
 
 ### VAD settings
@@ -288,19 +288,48 @@ whisper, lp.py and Ollama).
 
 ## Which models for which computer
 
-The steps run one after another, so the GPU only needs to hold the largest single model: the summary
-model with its context. Recording itself needs almost nothing (see "Everyday use" below).
+The steps run one after another, so the graphics card only needs to hold the largest single model: the summary
+model with its context. LokalProtokoll chooses the models with a **device profile** (`[device] profile` in
+`config.toml`, Profile in the app); "auto" picks it from the graphics card's memory (`lokalprotokoll/hardware.py`).
 
-| Your computer | Speech to text | Summary | Notes |
+| Device profile | Graphics card | Speech to text | Summary |
 |---|---|---|---|
-| GPU with 16 GB or more (like the RX 7800 XT) | KB-Whisper large | gemma4:12b, num_ctx 32768 | The defaults. About 12 minutes per meeting hour. |
-| GPU with 8-12 GB | KB-Whisper large | gemma4:12b or gemma3:12b with `num_ctx = 16384`, or a smaller model | The 12B models need 11-13 GB at 32768, and the desktop itself uses 1-2 GB. A smaller context needs less (not measured yet). If it does not fit, Ollama runs part of the model on the CPU, which is much slower: check that `lp.py compare` shows GPU 100%. Longer meetings are split into parts automatically. |
-| GPU with 4-6 GB | KB-Whisper medium or small (0.24-1.1 GB) | a 4B model (for example gemma3:4b), or the summary on the CPU | Not measured yet. |
-| No usable GPU | KB-Whisper small (medium if you can wait) | a small model on the CPU | Large runs at about 2x real time on a 6-core CPU; small is several times faster (not measured on CPU yet). |
+| desktop | 12 GB VRAM or more | KB-Whisper large, Whisper turbo | gemma4:12b, num_ctx 32768 |
+| laptop | 8-12 GB | KB-Whisper large, Whisper turbo | gemma4:e4b, num_ctx 16384 |
+| small | 4-8 GB | KB-Whisper large, Whisper turbo | gemma4:e2b, num_ctx 16384 |
+| cpu | none, or integrated graphics | KB-Whisper small, Whisper small | gemma4:e4b on the processor, num_ctx 16384 |
+
+Measured on 2026-10-07 (RX 7800 XT, Ryzen 5 5600X with 6 threads, 32 GB RAM):
+
+**Summary models**, the same 20-minute Swedish meeting (about 4,300 tokens) and prompt, minutes plus the check
+pass. VRAM is the increase in Windows' "GPU Adapter Memory, Dedicated Usage" counter while it ran; Ollama's own
+`/api/ps` number is far too low for the gemma4 "e" models (it said 0.3 GB).
+
+| Model | VRAM | On the GPU | On the processor only (`num_gpu = 0`) | The minutes (read by hand) |
+|---|---|---|---|---|
+| gemma4:12b | 9.2 GB (32k context), 9.0 GB (16k) | 46 s, 50 tokens/s | not tried | the most accurate and concise |
+| gemma4:e4b | 5.6 GB | 38 s, 105 tokens/s | 5.7 min, 11.5 tokens/s | the right facts and deadlines, but twice as long and some clumsy Swedish |
+| gemma4:e2b | 3.9 GB | 35 s, 122 tokens/s | 3.9 min, 21 tokens/s | the main points, but more often the wrong speaker |
+| gemma3:4b | | 36 s, 114 tokens/s | 5.2 min, 12 tokens/s | **made things up**: a deadline and a speaker that were not in the meeting. Not used. |
+
+**Speech to text on the processor only** (whisper.cpp `-ng`), 5 minutes of continuous speech (Riksdag):
+
+| Model | On the GPU | On the processor only |
+|---|---|---|
+| KB-Whisper small | 16.5x real time | 4.7x |
+| KB-Whisper medium | 10.2x | 1.9x |
+| KB-Whisper large | 7.0x | 1.0x |
+| Whisper large-v3-turbo | 7.0x | 1.1x |
+
+Meetings have pauses that are skipped, so they go faster than continuous speech.
+
+**The whole "cpu" profile**, everything on the processor, a 20-minute meeting: 13 minutes (transcription 3.4 min,
+speaker detection 1 min, minutes 8.7 min). So about 40 minutes per meeting hour on this 6-core desktop processor;
+laptop processors are usually slower.
 
 On any computer:
 
-- Speaker detection always runs on the CPU. A 6-core CPU handles it at about 14x real time.
+- Speaker detection always runs on the processor. A 6-core CPU handles it at about 14x real time.
 - Give the number of speakers when you know it.
 - Run `python tests/benchmark.py --variants tests/variants.toml` on the new computer: `report.md` then shows
   the real numbers for that hardware.

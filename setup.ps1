@@ -100,11 +100,11 @@ if (Test-Path $whisperCli) {
         Expand-Archive $zip -DestinationPath (Join-Path $root "tools\whisper-cpu") -Force
         Remove-Item $zip
     }
-    # Point config.toml at the CPU version.
-    $config = Get-Content config.toml -Raw
-    $config = $config -replace 'whisper_cli = "[^"]*"', 'whisper_cli = "tools/whisper-cpu/Release/whisper-cli.exe"'
-    Set-Content config.toml $config -NoNewline -Encoding ascii
-    Ok "CPU version: $cpuCli (config.toml updated)"
+    # Point config.toml at the CPU version, and use the models that are fast enough on
+    # the processor. (Edited by Python: config.toml is UTF-8, and a name in it may not be ASCII.)
+    & $venvPython -c "from lokalprotokoll.config import save_string as s; s('paths', 'whisper_cli', 'tools/whisper-cpu/Release/whisper-cli.exe'); s('device', 'profile', 'cpu')"
+    if ($LASTEXITCODE -ne 0) { throw "Could not update config.toml." }
+    Ok "CPU version: $cpuCli (config.toml updated, device profile: cpu)"
 } else {
     # The Vulkan build needs Git, the Visual Studio C++ build tools (with CMake) and the Vulkan SDK.
     if (-not (Have "git")) { Winget-Install "Git.Git" "Git" }
@@ -130,14 +130,15 @@ if (Test-Path $whisperCli) {
 }
 
 # ---------------------------------------------------------------- 6. models
-Step "Speech and speaker models (about 1.7 GB)"
+Step "Speech and speaker models (0.5-1.7 GB, depending on this computer)"
 & $venvPython setup_models.py
 if ($LASTEXITCODE -ne 0) { throw "Downloading the models failed." }
 Ok "models\"
 
 # ---------------------------------------------------------------- 7. summary model
 Step "Summary model (Ollama)"
-$llm = & $venvPython -c "import tomllib; print(tomllib.load(open('config.toml', 'rb'))['summarize']['model'])"
+# The model of the device profile (lokalprotokoll/hardware.py), not only config.toml.
+$llm = & $venvPython -c "from lokalprotokoll.config import load_config; print(load_config()['summarize']['model'])"
 $installed = ollama list | Select-String -SimpleMatch $llm
 if ($installed) {
     Ok "$llm is installed"

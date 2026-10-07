@@ -9,6 +9,7 @@
   python lp.py summarize <meeting folder> [--llm qwen3:14b]
   python lp.py compare <meeting folder> [--models gemma4:12b qwen3:14b]
   python lp.py search "budget"
+  python lp.py models [--profile laptop]        # download the models for this computer
 """
 
 import argparse
@@ -329,6 +330,30 @@ def cmd_search(cfg, args):
             print(f"  ... and {r['more']} more sentences")
 
 
+def cmd_models(cfg, args):
+    """Download the models of the device profile: speech models and the summary model."""
+    import subprocess
+    import sys
+
+    from lokalprotokoll import hardware
+
+    cmd = [sys.executable, str(Path(__file__).parent / "setup_models.py")]
+    if args.profile:
+        cmd += ["--profile", args.profile]
+        cfg = load_config(args.config, profile=False)
+        cfg.setdefault("device", {})["profile"] = args.profile
+        hardware.apply_profile(cfg)
+    if subprocess.run(cmd).returncode != 0:
+        raise SystemExit("Downloading the speech models failed.")
+    model = cfg["summarize"]["model"]
+    print(f"\nSummary model: {model}")
+    if model in summarize.installed_models(cfg):
+        print("  installed")
+        return
+    if subprocess.run(["ollama", "pull", model]).returncode != 0:
+        raise SystemExit(f"Downloading {model} failed. Is the Ollama app running?")
+
+
 def cmd_app(cfg, args):
     from lokalprotokoll import app
 
@@ -538,6 +563,10 @@ def main():
     p.add_argument("query", help='Words that must all be in the same sentence; "quotes" for a phrase')
     p.set_defaults(func=cmd_search)
 
+    p = sub.add_parser("models", help="Download the models of the device profile (see config.toml [device])")
+    p.add_argument("--profile", choices=["auto", "desktop", "laptop", "small", "cpu"])
+    p.set_defaults(func=cmd_models)
+
     p = sub.add_parser("app", help="Open the LokalProtokoll window")
     p.set_defaults(func=cmd_app)
 
@@ -572,7 +601,13 @@ def main():
     p.set_defaults(func=cmd_compare)
 
     args = parser.parse_args()
-    cfg = load_config(args.config)
+    from lokalprotokoll.hardware import apply_profile
+
+    # --set device.profile=... must be in place before the profile fills in its models,
+    # and a model set with --set must win over the profile's: so apply them twice.
+    cfg = load_config(args.config, profile=False)
+    apply_overrides(cfg, args.set)
+    apply_profile(cfg)
     apply_overrides(cfg, args.set)
     args.func(cfg, args)
 
