@@ -620,7 +620,9 @@ class ProfilePopup(PromptPopup):
         def save():
             picked = next(k for k, v in MINUTES_LANGUAGES.items() if v == choice.get())
             device_picked = next((k for k, v in DEVICE_CHOICES.items() if v == devices.get()), device)
-            self._choose(lambda: on_save(entry.get().strip(), picked, device_picked))
+            # Read the name now: _choose destroys the popup (and the entry) first.
+            name_picked = entry.get().strip()
+            self._choose(lambda: on_save(name_picked, picked, device_picked))
         entry.bind("<Return>", lambda e: save())
         entry.bind("<Escape>", lambda e: self.destroy())
         buttons = ctk.CTkFrame(frame, fg_color="transparent")
